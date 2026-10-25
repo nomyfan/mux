@@ -66,7 +66,7 @@ Paints the terminals and handles their input. It never parses program output; it
 
 - `agents/`: agent marks as SVGs (currently Claude Code and Codex only), named by the agent kind herdr reports and embedded at build time. Agents without a mark get a generic icon.
 - `app.png`: the app icon for use inside the app, embedded at build time: the Dock icon's tile at 256px, without its margin and drop shadow, which would show as gray corners in the UI. `scripts/make-icon.sh` renders it together with `resources/icon.png`.
-- `appearance.svg`: the Appearance page's icon in the settings sidebar, a painter's palette on a tile shaped and colored like the app icon.
+- `appearance.svg`: the Appearance page's icon in the settings sidebar, a painter's palette with no background, colored to show on either theme.
 
 ### Other directories
 

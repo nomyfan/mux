@@ -105,9 +105,9 @@ func (a *app) openSettings() {
 //go:embed icons/appearance.svg
 var appearanceSVG []byte
 
-// appearanceTile is the appearance page's icon: a painter's palette on a
-// tile shaped and colored as the app's icon.
-var appearanceTile = ui.MustParseSVG(appearanceSVG)
+// appearanceIcon is the appearance page's icon: a painter's palette, colored
+// to show on either theme's sidebar.
+var appearanceIcon = ui.MustParseSVG(appearanceSVG)
 
 // pageItem is the settings sidebar's item choosing the page id, named
 // label, with the page's icon in its own colors, larger than SidebarItem's
@@ -152,7 +152,7 @@ func (a *app) settingsDialog(c *ui.Context) {
 				a.pageItem(c, "server", "Server", appIcon).Children(func() {
 					ui.Box(c).Size(8, 8).Shrink(0).Radius(4).Background(dot)
 				})
-				a.pageItem(c, "appearance", "Appearance", appearanceTile)
+				a.pageItem(c, "appearance", "Appearance", appearanceIcon)
 			}).Grow(1).Label("Settings")
 		})
 		ui.Box(c).Width(1).Shrink(0).Background(t.Border)
