@@ -13,7 +13,7 @@ go test ./src/term -run TestSearch # a single test
 scripts/make-icon.sh               # render resources/icon.png and src/icons/app.png from the artwork in design/ (needs ImageMagick)
 ```
 
-`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./src`) live in `mygo.json`.
+`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./src`) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel.
 
 ## Modules
 
