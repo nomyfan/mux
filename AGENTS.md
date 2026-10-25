@@ -31,7 +31,7 @@ The app itself: top-level UI and app state.
   - Request queue: the endpoint handles one request at a time (otherwise it answers `endpoint_busy`), so requests wait here and the next is sent once the previous one is answered.
 - `settings.go`: the settings dialog (Cmd+,): pages listed on the left (Server, Appearance), the chosen one on the right. Appearance is auto, light or dark, applied through `mygo.Theme.SetSource`, and the terminals' fonts: a family chosen among the system's monospaced ones (default: the system's own, `monospace`) and an optional fallback family, among all of them, for the glyphs the first lacks such as Nerd Font icons (default: none), and their size (8–32, default 14) (`ui.FontFamilies`, listed in the background at startup). They apply at once through `term.View.SetFont`. Settings are saved as `settings.json` in the app's user data directory and applied before the window opens.
 - `server.go`: the herdr server's state in the UI. When no server listens on the socket, the sidebar is emptied and the pane area offers Start Server; the settings' Server page shows the status and starts or stops it (stopping asks for confirmation). The server is shown with the in-app icon `src/icons/app.png`.
-- `theme.go`: the Vellum colors in light and dark. Controls take its Zed colors, terminals its Ghostty colors.
+- `theme.go`: the Vellum colors in light and dark. Controls take its Zed colors; terminals take its Ghostty colors, with a true blue and cyan, their own bright colors and grays that show on either ground, and the cursor in the controls' accent.
 
 ### `src/herdr/endpoint`
 

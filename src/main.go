@@ -884,15 +884,16 @@ func paneLabel(p endpoint.Pane) string {
 
 // statusDot shows an agent's state as a dot in a soft halo, as Coda's: a
 // working agent's halo breathes, a blocked one's ripples out for the user,
-// a done one's and an idle one's stay still, as all do for less motion.
+// a done one's and an idle one's stay still, as all do for less motion;
+// the colors, amber, red and green, tell the states apart without it.
 func statusDot(c *ui.Context, status string) {
 	t := c.Theme()
 	color := t.TextMuted
 	switch status {
 	case "working":
-		color = t.Accent
-	case "blocked":
 		color = t.Warning
+	case "blocked":
+		color = t.Danger
 	case "done":
 		color = t.Success
 	}
