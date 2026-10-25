@@ -147,11 +147,20 @@ func (a *app) view(c *ui.Context) {
 		w := a.sidebarWidth * shown
 		ui.Row(c).Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
 			ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth).Background(t.Surface).
-				Children(func() { a.sidebar(c) })
+				Children(func() { a.sidebar(c, w) })
 		})
 		if w > 0 {
 			ui.Box(c).Width(1).Background(t.Border)
 		}
+		// The terminal takes the room the sidebar leaves once it settles.
+		room, settled := float32(0), float32(0)
+		if w > 0 {
+			room = w + 1
+		}
+		if !a.sidebarHidden {
+			settled = a.sidebarWidth + 1
+		}
+		a.term.Settling(room - settled)
 		// Hidden, the sidebar leaves the title room for the window controls.
 		a.pane(c, 16+(1-shown)*(bar.Left+36))
 		if shown == 1 {
@@ -183,11 +192,17 @@ func (a *app) view(c *ui.Context) {
 }
 
 // sidebar is the session's panes by workspace, under the room the window
-// controls take.
-func (a *app) sidebar(c *ui.Context) {
+// controls take, as much of it as shows: w wide.
+func (a *app) sidebar(c *ui.Context, w float32) {
 	ui.Row(c).Height(a.titleBand(c)).Shrink(0).AlignItems(ui.Center).Padding(0, 8, 0, 0).DragWindow().Children(func() {
 		ui.Spacer(c)
-		if headerButton(c, "new-workspace", newWorkspaceIcon, "New Workspace") {
+		// The button fades out as the sliding sidebar takes it toward the
+		// window controls and the sidebar's toggle, rather than across them.
+		const fade = 24
+		controls := c.TitleBar().Left + 8 + 32
+		b := iconButton(c, "new-workspace", newWorkspaceIcon, "New Workspace")
+		b.Opacity(min(max((w-8-26-controls-4)/fade, 0), 1))
+		if b.Clicked() {
 			a.newWorkspace()
 		}
 	})

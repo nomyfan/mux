@@ -29,6 +29,8 @@ type View struct {
 	cellW, cellH float32
 	width        float32 // the view's size, as last laid out
 	height       float32
+	grow         float32 // how much wider it is to settle, as Settling says
+	grew         float32 // grow as of the last layout
 	baseline     float32
 	glyphs       map[glyphKey][]ui.Glyph
 	light, dark  *palette
@@ -115,6 +117,13 @@ type drag struct {
 	to    int     // the position last asked for
 }
 
+// Settling tells the view it is to grow by dw in width as a transition
+// around it, such as the sidebar sliding, settles. The view asks the
+// server for the size it settles at, once, rather than at every step: the
+// server lays the surface out a round trip later, and the program in each
+// pane would redraw at every size.
+func (v *View) Settling(dw float32) { v.grow = dw }
+
 // Build shows s, sending input and the size the view fits to ep, which is
 // nil while the client is not connected.
 func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hooks) ui.Element {
@@ -147,7 +156,8 @@ func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hook
 		e.Cursor(ui.CursorMove)
 	}
 	if ep != nil && b.W > 0 && b.H > 0 {
-		cols, rows := v.fit(s, b.W, b.H)
+		// The bounds are the last layout's, which the growth then goes with.
+		cols, rows := v.fit(s, b.W+v.grew, b.H)
 		size := endpoint.Size{
 			Cols: uint16(max(1, cols)), Rows: uint16(max(1, rows)),
 			CellWidth: uint32(math.Round(float64(v.cellW))), CellHeight: uint32(v.cellH),
@@ -156,6 +166,7 @@ func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hook
 			v.asked = size
 		}
 	}
+	v.grew = v.grow
 	if cur := v.cursor(); cur != nil {
 		e.TextCaret(v.cellRect(ui.Rect{}, int(cur.X), int(cur.Y)))
 	}
@@ -175,7 +186,14 @@ func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hook
 		for _, b := range boxes {
 			r := b.content
 			ui.Box(c.Key(b.pane.ID+" cells")).Absolute().Left(r.X).Top(r.Y).Size(r.W, r.H).Cursor(ui.CursorText)
-			h := ui.Row(c.Key(b.pane.ID)).Absolute().Left(b.header.X).Top(b.header.Y).Size(b.header.W, b.header.H).AlignItems(ui.Center)
+			h := ui.Row(c.Key(b.pane.ID)).Absolute().Left(b.header.X).Top(b.header.Y).Height(b.header.H).AlignItems(ui.Center)
+			// The view's width is the last frame's, behind it while it
+			// grows or shrinks: a header out to its edge keeps to it.
+			if b.right {
+				h.Right(0)
+			} else {
+				h.Width(b.header.W)
+			}
 			if b.pane.Rect.Y == 0 {
 				// Along the top of the window, as its title bar. Nothing else
 				// on the header may take the press, or the window would not

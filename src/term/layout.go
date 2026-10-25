@@ -26,6 +26,7 @@ type paneBox struct {
 	card    ui.Rect
 	header  ui.Rect
 	content ui.Rect
+	right   bool // whether it reaches the view's right edge
 }
 
 // lift returns how many rows a split tab's view keeps beyond the surface
@@ -104,6 +105,7 @@ func (v *View) boxes() []paneBox {
 			X: ox + float32(in.X)*v.cellW, Y: oy + float32(in.Y)*v.cellH,
 			W: float32(in.Width) * v.cellW, H: float32(in.Height) * v.cellH,
 		}}
+		b.right = lone(s) || p.Rect.X+p.Rect.Width >= s.Frame.Width
 		if lone(s) {
 			b.card = ui.Rect{W: v.width, H: v.height}
 			b.header = ui.Rect{W: v.width, H: v.headerHeight()}
@@ -122,7 +124,9 @@ func (v *View) boxes() []paneBox {
 
 // span returns where a split tab's area r of cells is in the view: out to
 // the view's right and bottom edges where it meets them, taking the room
-// short of a whole cell there.
+// short of a whole cell there. A surface laid out for a view still
+// settling may reach past them; the area stops at them, so the headers
+// stay in the view, and the cells go on for the view to clip.
 func (v *View) span(r endpoint.Rect) ui.Rect {
 	left, right := float32(r.X)*v.cellW, float32(r.X+r.Width)*v.cellW
 	top, bottom := v.rowTop(r.Y), v.rowTop(r.Y+r.Height)
@@ -132,6 +136,8 @@ func (v *View) span(r endpoint.Rect) ui.Rect {
 	if r.Y+r.Height >= v.surface.Frame.Height {
 		bottom = v.height
 	}
+	left, right = min(left, v.width), min(right, v.width)
+	top, bottom = min(top, v.height), min(bottom, v.height)
 	return ui.Rect{X: left, Y: top, W: right - left, H: bottom - top}
 }
 

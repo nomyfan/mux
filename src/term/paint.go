@@ -11,6 +11,10 @@ import (
 )
 
 func (v *View) paint(p *ui.Painter, r ui.Rect) {
+	// The view lays its panes out to the size it had in the last frame,
+	// which the build knows; the paint has this frame's, which differs
+	// while the view grows or shrinks.
+	v.width, v.height = r.W, r.H
 	s := v.surface
 	if s == nil {
 		p.Fill(r, v.pal.theme.Background, 0)
@@ -185,7 +189,8 @@ func wide(symbol string) bool {
 
 // paintCursor draws the cursor in its shape (DECSCUSR: a block for 0 to 2,
 // an underline for 3 and 4, a bar for 5 and 6), hollow while the view does
-// not have the focus, and an input method's composition at it.
+// not have the focus, and an input method's composition at it. On a wide
+// character the cursor covers both of its cells.
 func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 	cur := v.cursor()
 	if cur == nil {
@@ -197,6 +202,10 @@ func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 		color = th.Foreground
 	}
 	box := v.cellRect(r, int(cur.X), int(cur.Y))
+	c := &v.surface.Frame.Cells[int(cur.Y)*int(v.surface.Frame.Width)+int(cur.X)]
+	if wide(c.Symbol) {
+		box.W *= 2
+	}
 	if v.preedit != "" {
 		glyphs := ui.Shape(v.preedit, v.font)
 		width := v.cellW
@@ -214,13 +223,12 @@ func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 	}
 	switch cur.Shape {
 	case 3, 4:
-		p.Fill(ui.Rect{X: box.X, Y: box.Y + v.cellH - 2, W: v.cellW, H: 2}, color, 0)
+		p.Fill(ui.Rect{X: box.X, Y: box.Y + v.cellH - 2, W: box.W, H: 2}, color, 0)
 	case 5, 6:
 		p.Fill(ui.Rect{X: box.X, Y: box.Y, W: 2, H: v.cellH}, color, 0)
 	default:
 		p.Fill(box, color, 0)
 		// The cell's glyph again, on the block.
-		c := &v.surface.Frame.Cells[int(cur.Y)*int(v.surface.Frame.Width)+int(cur.X)]
 		if c.Symbol != "" && c.Symbol != " " && !c.Skip {
 			text := th.CursorText
 			if text == (ui.Color{}) {
