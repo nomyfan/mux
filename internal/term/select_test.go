@@ -6,7 +6,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 // frame lays lines out as a surface does, a wide character's second cell

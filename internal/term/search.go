@@ -7,7 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 // search is the text the user searches a pane's text for, history and

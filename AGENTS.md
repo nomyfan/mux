@@ -5,21 +5,21 @@ Mux is a native GUI client for herdr, a terminal multiplexer for coding agents, 
 ## Commands
 
 ```sh
-go tool mygo dev                   # run a development build with live reload
-go tool mygo build                 # package the app (.app and .dmg on macOS, into build/)
-go tool mygo vet .                 # go vet plus checks for stored UI build values
-CGO_ENABLED=0 go test ./...        # all tests
-go test ./src/term -run TestSearch # a single test
-scripts/make-icon.sh               # render resources/icon.png and src/icons/app.png from the artwork in design/ (needs ImageMagick)
+go tool mygo dev                          # run a development build with live reload
+go tool mygo build                        # package the app (.app and .dmg on macOS, into build/)
+go tool mygo vet .                        # go vet plus checks for stored UI build values
+CGO_ENABLED=0 go test ./...               # all tests
+go test ./internal/term -run TestSearch   # a single test
+scripts/make-icon.sh                      # render resources/icon.png and cmd/mux/icons/app.png from the artwork in design/ (needs ImageMagick)
 ```
 
-`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./src`) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel.
+`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./cmd/mux`) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel.
 
 ## Modules
 
 Dependencies run `main` → `term` → `herdr/endpoint`; `herdr/server` and the icons are used only by `main`.
 
-### `src/` (package `main`)
+### `cmd/mux/` (package `main`)
 
 The app itself: top-level UI and app state.
 
@@ -30,10 +30,10 @@ The app itself: top-level UI and app state.
   - A background goroutine connects to the endpoint and reconnects every second after a drop. Messages it reads go into an inbox and reach the main thread through `Window.Update`, a batch at a time.
   - Request queue: the endpoint handles one request at a time (otherwise it answers `endpoint_busy`), so requests wait here and the next is sent once the previous one is answered.
 - `settings.go`: the settings dialog (Cmd+,): pages listed on the left (Server, Appearance), the chosen one on the right. Appearance is auto, light or dark, applied through `mygo.Theme.SetSource`, and the terminals' fonts: a family chosen among the system's monospaced ones (default: the system's own, `monospace`) and an optional fallback family, among all of them, for the glyphs the first lacks such as Nerd Font icons (default: none), and their size (8–32, default 14) (`ui.FontFamilies`, listed in the background at startup). They apply at once through `term.View.SetFont`. Settings are saved as `settings.json` in the app's user data directory and applied before the window opens.
-- `server.go`: the herdr server's state in the UI. When no server listens on the socket, the sidebar is emptied and the pane area offers Start Server; the settings' Server page shows the status and starts or stops it (stopping asks for confirmation). The server is shown with the in-app icon `src/icons/app.png`.
+- `server.go`: the herdr server's state in the UI. When no server listens on the socket, the sidebar is emptied and the pane area offers Start Server; the settings' Server page shows the status and starts or stops it (stopping asks for confirmation). The server is shown with the in-app icon `cmd/mux/icons/app.png`.
 - `theme.go`: the Vellum colors in light and dark. Controls take its Zed colors; terminals take its Ghostty colors, with a true blue and cyan, their own bright colors and grays that show on either ground, and the cursor in the controls' accent.
 
-### `src/herdr/endpoint`
+### `internal/herdr/endpoint`
 
 A client of herdr's client endpoint protocol (generation 1). No UI dependency.
 
@@ -43,14 +43,14 @@ A client of herdr's client endpoint protocol (generation 1). No UI dependency.
 - `input.go`: input events sent to a pane: keys, text, paste and mouse.
 - `surface.go`: applies incremental patches to the local surface. A patch for another revision returns `ErrStalePatch`, on which `main` drops the connection and reconnects to get a whole surface.
 
-### `src/herdr/server`
+### `internal/herdr/server`
 
 Starts and stops the herdr server. No UI dependency.
 
 - `server.go`: the API socket beside the client socket (`herdr.sock` next to `herdr-client.sock`), whose JSON protocol takes one request per line; `Stop` sends `server.stop` there, as the client endpoint doesn't offer it. `NotRunning` tells a missing or refusing socket from other dial errors.
 - `start_unix.go`: `Start` runs `herdr server` through the user's login shell (`$SHELL -l -c`), in its own session so it outlives the app, so that it finds herdr and its panes get the user's environment rather than the Finder's. `start_other.go` stubs it elsewhere.
 
-### `src/term`
+### `internal/term`
 
 Paints the terminals and handles their input. It never parses program output; it paints the cells the server already laid out.
 
@@ -62,7 +62,7 @@ Paints the terminals and handles their input. It never parses program output; it
 - `search.go`: per-pane search (Cmd+F), performed by the server. Responses to earlier searches are dropped, and a search reruns when the pane's content changes.
 - `rearrange.go`: dragging a pane by its title. Dropped within 25% of a target pane's edge, it goes beside the target; dropped in the middle, the two swap places.
 
-### `src/icons`
+### `cmd/mux/icons`
 
 - `agents/`: agent marks as SVGs (currently Claude Code and Codex only), named by the agent kind herdr reports and embedded at build time. Agents without a mark get a generic icon.
 - `app.png`: the app icon for use inside the app, embedded at build time: the Dock icon's tile at 256px, without its margin and drop shadow, which would show as gray corners in the UI. `scripts/make-icon.sh` renders it together with `resources/icon.png`.
@@ -70,7 +70,7 @@ Paints the terminals and handles their input. It never parses program output; it
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `src/icons/app.png` from the artwork in `design/`.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`.
 
 ## Notes
 

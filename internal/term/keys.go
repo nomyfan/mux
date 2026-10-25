@@ -3,7 +3,7 @@ package term
 import (
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 // specialKeys are the keys that type no text, which go to the pane as keys.

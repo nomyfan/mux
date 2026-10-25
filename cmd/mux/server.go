@@ -6,7 +6,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/server"
+	"mux/internal/herdr/server"
 )
 
 //go:embed icons/app.png

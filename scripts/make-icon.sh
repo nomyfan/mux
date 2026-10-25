@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Renders the artwork in design/ into resources/icon.png, the 1024px Dock icon, and src/icons/app.png,
+# Renders the artwork in design/ into resources/icon.png, the 1024px Dock icon, and cmd/mux/icons/app.png,
 # the 256px icon shown inside the app. Needs ImageMagick.
 #
 # The artwork is a sheep peeking from the lower-left corner of a flat, cool-gray background. The
@@ -14,7 +14,7 @@ cd "${0:A:h}/.."
 
 src=${1:-"design/Kawaii Sheep Peeking from the Corner.png"}
 out=${2:-resources/icon.png}
-app=${3:-src/icons/app.png}
+app=${3:-cmd/mux/icons/app.png}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 

@@ -8,8 +8,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
-	"mux/src/term"
+	"mux/internal/herdr/endpoint"
+	"mux/internal/term"
 )
 
 // The sidebar groups tabs by workspace, a tab with an agent showing it and

@@ -4,7 +4,7 @@ import (
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 // Cell modifiers, as herdr sends them.

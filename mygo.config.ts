@@ -8,7 +8,7 @@ export default {
   name: "Mux",
   identifier: "dev.callcc.mux",
   version: "0.1.0",
-  main: "./src",
+  main: "./cmd/mux",
   out: "build",
   macos: {
     infoPlist: { CFBundleVersion: commit },

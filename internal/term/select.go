@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"strings"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 // point is a cell of a pane's text: Row counts from the first row of its

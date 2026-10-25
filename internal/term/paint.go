@@ -7,7 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/text/width"
 
-	"mux/src/herdr/endpoint"
+	"mux/internal/herdr/endpoint"
 )
 
 func (v *View) paint(p *ui.Painter, r ui.Rect) {

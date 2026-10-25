@@ -21,9 +21,9 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"mux/src/herdr/endpoint"
-	"mux/src/herdr/server"
-	"mux/src/term"
+	"mux/internal/herdr/endpoint"
+	"mux/internal/herdr/server"
+	"mux/internal/term"
 )
 
 type app struct {
