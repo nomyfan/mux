@@ -4,8 +4,10 @@ import (
 	"cmp"
 	_ "embed"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +28,10 @@ type settings struct {
 	FallbackFont string `json:"fallback_font,omitempty"`
 	// FontSize is the terminals' font size, 0 for the default.
 	FontSize float64 `json:"font_size,omitempty"`
+	// FontSmoothing draws the terminals' text with macOS's font smoothing,
+	// heavier, as most Mac apps draw theirs; without it, as Ghostty does
+	// by default.
+	FontSmoothing bool `json:"font_smoothing,omitempty"`
 }
 
 // The terminals' font sizes: the default, and the bounds of the control.
@@ -48,7 +54,7 @@ func (s settings) terminalFont() ui.Font {
 	if s.FallbackFont != "" {
 		families += ", " + s.FallbackFont
 	}
-	return ui.Font{Family: families, Size: float32(cmp.Or(s.FontSize, defaultFontSize))}
+	return ui.Font{Family: families, Size: float32(cmp.Or(s.FontSize, defaultFontSize)), Antialiased: !s.FontSmoothing}
 }
 
 // appearances are the choices of the dialog's appearance control, in order.
@@ -105,17 +111,29 @@ func (a *app) openSettings() {
 //go:embed icons/appearance.svg
 var appearanceSVG []byte
 
-// appearanceIcon is the appearance page's icon: a painter's palette, colored
-// to show on either theme's sidebar.
+// appearanceIcon is the appearance page's icon, drawn after System
+// Settings': a ringed circle half light and half dark, around a smaller one
+// the other way round, on the app icon's dark tile, as the other pages'
+// icons are.
 var appearanceIcon = ui.MustParseSVG(appearanceSVG)
+
+//go:embed icons/terminal.svg
+var terminalSVG []byte
+
+// terminalIcon is the terminal page's icon: a prompt on a dark tile.
+var terminalIcon = ui.MustParseSVG(terminalSVG)
+
+// settingsPages are the settings' page ids and titles.
+var settingsPages = map[string]string{"server": "Server", "appearance": "Appearance", "terminal": "Terminal"}
 
 // pageItem is the settings sidebar's item choosing the page id, named
 // label, with the page's icon in its own colors, larger than SidebarItem's
-// line icons: the item widens its padding before its label for the icon,
-// which lies in it. Add to the item with Children.
+// line icons and as large as the System Settings' (20pt): the item widens
+// its padding before its label for the icon, which lies in it. Add to the
+// item with Children.
 func (a *app) pageItem(c *ui.Context, id, label string, icon ui.ImageSource) ui.Element {
 	t := c.Theme()
-	const size = 24
+	const size = 20
 	item := ui.SidebarItem(c.Key(id), id, nil, label).Padding(t.Space(2), t.Space(2), t.Space(2), t.Space(2)+size+t.Space(2.5))
 	chosenLook(c, item, a.settingsPage == id)
 	item.Children(func() {
@@ -153,23 +171,32 @@ func (a *app) settingsDialog(c *ui.Context) {
 					ui.Box(c).Size(8, 8).Shrink(0).Radius(4).Background(dot)
 				})
 				a.pageItem(c, "appearance", "Appearance", appearanceIcon)
+				a.pageItem(c, "terminal", "Terminal", terminalIcon)
 			}).Grow(1).Label("Settings")
 		})
 		ui.Box(c).Width(1).Shrink(0).Background(t.Border)
-		ui.Column(c).Grow(1).MinWidth(0).Padding(t.Space(4), t.Space(5), t.Space(5), t.Space(5)).Gap(t.Space(4)).Children(func() {
-			title := map[string]string{"server": "Server", "appearance": "Appearance"}[a.settingsPage]
-			ui.Row(c).AlignItems(ui.Center).Shrink(0).Children(func() {
+		// The page scrolls under its title, as the terminal page's preview
+		// grows with the font.
+		ui.Column(c).Grow(1).MinWidth(0).Padding(t.Space(4), 0, 0, 0).Gap(t.Space(4)).Children(func() {
+			title := settingsPages[a.settingsPage]
+			ui.Row(c).AlignItems(ui.Center).Shrink(0).Padding(0, t.Space(5)).Children(func() {
 				ui.Text(c, title).FontSize(t.FontSize + 4).Bold().Grow(1)
 				if iconButton(c, "close", closeIcon, "Close").Clicked() {
 					a.settingsOpen = false
 				}
 			})
-			switch a.settingsPage {
-			case "server":
-				a.serverSettings(c)
-			case "appearance":
-				a.appearanceSettings(c)
-			}
+			ui.Scroll(c.Key(a.settingsPage)).Grow(1).Children(func() {
+				ui.Column(c).Padding(0, t.Space(5), t.Space(5), t.Space(5)).Gap(t.Space(4)).Children(func() {
+					switch a.settingsPage {
+					case "server":
+						a.serverSettings(c)
+					case "appearance":
+						a.appearanceSettings(c)
+					case "terminal":
+						a.terminalSettings(c)
+					}
+				})
+			})
 		})
 	})
 }
@@ -226,7 +253,14 @@ func (a *app) appearanceSettings(c *ui.Context) {
 			ui.Segmented(c.Key("appearance"), &a.appearance, "Auto", "Light", "Dark").Label("Theme").
 				OnChange(func() { a.setAppearance(appearances[a.appearance]) })
 		})
-		ui.Divider(c)
+	})
+}
+
+// terminalSettings chooses the terminals' fonts and how they are drawn,
+// under a preview of them.
+func (a *app) terminalSettings(c *ui.Context) {
+	settingsCard(c, func() {
+		ui.Box(c).Shrink(0).Padding(c.Theme().Space(3), 0, c.Theme().Space(1.5), 0).Children(func() { a.fontPreview(c) })
 		settingsRow(c, "Terminal Font", "The monospaced font the terminals use.", func() {
 			ui.Combobox(c.Key("terminal-font"), &a.terminalFamily, a.monoFonts).Label("Terminal Font").Width(220).
 				OnChange(func() { a.setFont(&a.settings.TerminalFont, a.terminalFamily, systemFont) })
@@ -239,6 +273,85 @@ func (a *app) appearanceSettings(c *ui.Context) {
 		ui.Divider(c)
 		settingsRow(c, "Font Size", "The terminals’ text size, in points.", func() {
 			ui.Row(c).Gap(c.Theme().Space(1)).AlignItems(ui.Center).Children(func() { a.fontSizeControl(c) })
+		})
+		// Font smoothing is macOS's; elsewhere the switch would change nothing.
+		if runtime.GOOS == "darwin" {
+			ui.Divider(c)
+			settingsRow(c, "Font Smoothing", "Draws text heavier, as most Mac apps do.", func() {
+				ui.Switch(c.Key("font-smoothing"), &a.settings.FontSmoothing).Label("Font Smoothing").
+					OnChange(a.applyFont)
+			})
+		}
+	})
+}
+
+// previewRun is a stretch of the font preview's text, in a color of the
+// terminals' palette (-1 for their foreground), bold or not.
+type previewRun struct {
+	text  string
+	color int
+	bold  bool
+}
+
+// previewText is the font preview's text, by line: a starship prompt, whose
+// Nerd Font icons show the fallback font, and go test's report, its tabs
+// laid out as spaces to the next tab stop, as terminals do.
+var previewText = [][]previewRun{
+	{{"mux", 6, true}, {" on ", -1, false}, {"\ue0a0 main", 5, true}, {" via ", -1, false},
+		{"🐹 v1.27.1", 6, true}, {" via ", -1, false}, {"\ue718 v22.21.1", 2, true}},
+	{{"➜ ", 2, true}, {"go test ./...", -1, false}},
+	{{"ok      mux/cmd/mux     0.387s", -1, false}},
+	{{"ok      mux/internal/herdr/endpoint     (cached)", -1, false}},
+	{{"ok      mux/internal/term       0.412s", -1, false}},
+}
+
+// fontPreview shows the preview text in the terminals' font, drawn as the
+// terminals draw it, on their background. It shapes the text again only
+// as the font changes.
+func (a *app) fontPreview(c *ui.Context) {
+	th := c.Theme()
+	font := a.settings.terminalFont()
+	if a.previewGlyphs == nil || a.previewFont != font {
+		a.previewFont = font
+		a.previewGlyphs = make([][][]ui.Glyph, len(previewText))
+		for i, line := range previewText {
+			for _, run := range line {
+				f := font
+				if run.bold {
+					f.Weight = 700
+				}
+				a.previewGlyphs[i] = append(a.previewGlyphs[i], ui.Shape(run.text, f))
+			}
+		}
+	}
+	glyphs := a.previewGlyphs
+	pal := lightTerminal
+	if th.Dark {
+		pal = darkTerminal
+	}
+	m := font.Metrics()
+	lineH := float32(math.Ceil(float64(m.Ascent + m.Descent + m.LineGap)))
+	baseline := float32(math.Round(float64(m.Ascent + m.LineGap/2)))
+	pad := th.Space(3)
+	radius := th.Space(1.5)
+	ui.Box(c).Height(float32(len(glyphs))*lineH+2*pad).Radius(radius).Border(1, th.Border).
+		Background(pal.Background).Draw(func(p *ui.Painter, r ui.Rect) {
+		// Lines too wide for the box, in a large font, end at its border.
+		inner := ui.Rect{X: r.X + 1, Y: r.Y + 1, W: r.W - 2, H: r.H - 2}
+		p.Clip(inner, radius-1, func() {
+			for i, line := range glyphs {
+				x, y := r.X+pad, r.Y+pad+float32(i)*lineH+baseline
+				for j, g := range line {
+					color := pal.Foreground
+					if k := previewText[i][j].color; k >= 0 {
+						color = pal.Palette[k]
+					}
+					p.Glyphs(g, x, y, color)
+					if n := len(g); n > 0 {
+						x += g[n-1].X + g[n-1].Advance
+					}
+				}
+			}
 		})
 	})
 }
@@ -295,10 +408,7 @@ func (a *app) setFont(field *string, family, def string) {
 		return
 	}
 	*field = family
-	a.term.SetFont(a.settings.terminalFont())
-	if err := a.settings.save(); err != nil {
-		a.err = err.Error()
-	}
+	a.applyFont()
 }
 
 // setFontSize sets the terminals' font size, paints the terminals in it,
@@ -311,6 +421,12 @@ func (a *app) setFontSize(size float64) {
 		return
 	}
 	a.settings.FontSize = size
+	a.applyFont()
+}
+
+// applyFont paints the terminals in the font the settings set, and saves
+// them.
+func (a *app) applyFont() {
 	a.term.SetFont(a.settings.terminalFont())
 	if err := a.settings.save(); err != nil {
 		a.err = err.Error()

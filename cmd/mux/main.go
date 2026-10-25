@@ -86,6 +86,10 @@ type app struct {
 	fontSize      float64
 	fontSizeText  string
 	fontSizeInput ui.Handle
+	// previewGlyphs are the terminal settings' font preview, shaped in
+	// previewFont.
+	previewFont   ui.Font
+	previewGlyphs [][][]ui.Glyph
 
 	// queue holds the requests waiting to be sent: the endpoint takes one
 	// at a time, refusing another until it has answered (endpoint_busy).

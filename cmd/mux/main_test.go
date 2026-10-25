@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 	"time"
 
@@ -474,21 +475,17 @@ func TestSettingsTerminalFont(t *testing.T) {
 	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, monoFonts: []string{systemFont, "Berkeley Mono", "Menlo"},
 		allFonts: []string{noFont, "Menlo", "Symbols Nerd Font"}}
 	tt := ui.NewTester(a.view, 1000, 600)
-	tt.Key(ui.Cmd, ui.KeyComma)
-	if err := tt.Click("Appearance"); err != nil {
-		t.Fatal(err)
-	}
+	openTerminalSettings(tt)
 	if f := (settings{}).terminalFont().Family; f != "monospace" {
 		t.Errorf("default terminal font families %q", f)
 	}
 	if a.terminalFamily != systemFont || a.fallbackFamily != noFont {
 		t.Errorf("font controls at %q and %q, not the defaults", a.terminalFamily, a.fallbackFamily)
 	}
-	// The control lines up with the theme's on the right of its row.
-	dark, _ := tt.Find("Dark")
+	// The control lies right of its label.
 	label, _ := tt.Find("Terminal Font")
 	note, _ := tt.Find("The monospaced font the terminals use.")
-	tt.ClickAt(dark.X, (label.Y+note.Y+note.H)/2)
+	tt.ClickAt(label.X+label.W+30, (label.Y+note.Y+note.H)/2)
 	if err := tt.Click("Menlo"); err != nil {
 		t.Fatalf("%v in %q", err, tt.Texts())
 	}
@@ -499,7 +496,7 @@ func TestSettingsTerminalFont(t *testing.T) {
 	// The fallback font's control lies below.
 	label, _ = tt.Find("Fallback Font")
 	note, _ = tt.Find("Fills in what it lacks, as Nerd Font icons.")
-	tt.ClickAt(dark.X, (label.Y+note.Y+note.H)/2)
+	tt.ClickAt(label.X+label.W+30, (label.Y+note.Y+note.H)/2)
 	if err := tt.Click("Symbols Nerd Font"); err != nil {
 		t.Fatalf("%v in %q", err, tt.Texts())
 	}
@@ -519,21 +516,16 @@ func TestSettingsFontSize(t *testing.T) {
 	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
 	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
 	tt := ui.NewTester(a.view, 1000, 600)
-	tt.Key(ui.Cmd, ui.KeyComma)
-	if err := tt.Click("Appearance"); err != nil {
-		t.Fatal(err)
-	}
+	openTerminalSettings(tt)
 	if a.fontSize != defaultFontSize {
 		t.Errorf("size control at %v, not the default", a.fontSize)
 	}
 	saved := func() float64 { return loadSettings().FontSize }
-	// The field lies under the theme control's last segment, the stepper
-	// right of it.
-	dark, _ := tt.Find("Dark")
+	// The field lies right of the label, 48 wide, the stepper right of it.
 	label, _ := tt.Find("Font Size")
 	note, _ := tt.Find("The terminals’ text size, in points.")
-	y := (label.Y + note.Y + note.H) / 2
-	tt.ClickAt(dark.X, y)
+	x, y := label.X+label.W+16, (label.Y+note.Y+note.H)/2
+	tt.ClickAt(x+10, y)
 	tt.Key(0, ui.KeyUp)
 	tt.Key(0, ui.KeyUp)
 	tt.Frame()
@@ -551,11 +543,47 @@ func TestSettingsFontSize(t *testing.T) {
 	if saved() != 20 {
 		t.Errorf("saved size %v after typing 200, out of range", saved())
 	}
-	tt.ClickAt(dark.X+dark.W+6, y+6)
+	// The preview above grew with the size, moving the row down.
+	label, _ = tt.Find("Font Size")
+	note, _ = tt.Find("The terminals’ text size, in points.")
+	tt.ClickAt(x+48+4+6, (label.Y+note.Y+note.H)/2+6)
 	tt.Frame()
 	if saved() != 19 || a.fontSizeText != "19" {
 		t.Errorf("saved size %v, field %q, after the stepper's down arrow", saved(), a.fontSizeText)
 	}
+}
+
+// On macOS, the settings draw the terminals' text with font smoothing or
+// without, as by default, and save the choice.
+func TestSettingsFontSmoothing(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("font smoothing is macOS's")
+	}
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	tt := ui.NewTester(a.view, 1000, 600)
+	openTerminalSettings(tt)
+	if !a.settings.terminalFont().Antialiased {
+		t.Error("the terminals' text smoothed by default")
+	}
+	// The switch lies at the right of its row, as the controls above end.
+	label, _ := tt.Find("Font Smoothing")
+	note, _ := tt.Find("Draws text heavier, as most Mac apps do.")
+	tt.ClickAt(label.X+label.W+30, (label.Y+note.Y+note.H)/2)
+	tt.Frame()
+	if s := loadSettings(); !s.FontSmoothing || s.terminalFont().Antialiased {
+		t.Errorf("saved font smoothing %v after turning it on", s.FontSmoothing)
+	}
+}
+
+// openTerminalSettings opens the settings on the terminal page, whose item
+// lies below the appearance page's: Click would find the terminals' view,
+// labeled the same.
+func openTerminalSettings(tt *ui.Tester) {
+	tt.Key(ui.Cmd, ui.KeyComma)
+	server, _ := tt.Find("Server")
+	appearance, _ := tt.Find("Appearance")
+	tt.ClickAt(appearance.X+appearance.W/2, 2*appearance.Y-server.Y+appearance.H/2)
 }
 
 // Cmd+T makes a tab in the focused workspace, showing its tabs, and
