@@ -40,8 +40,8 @@ func TestSidebar(t *testing.T) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
 	}
-	if _, ok := tt.Find("New Workspace"); !ok {
-		t.Error("no New Workspace button")
+	if _, ok := tt.Find("New Workspace"); ok {
+		t.Error("a New Workspace button, where Cmd+N makes one")
 	}
 	for _, text := range []string{"/srv/api", "/var/log"} {
 		if tt.HasText(text) {
@@ -555,5 +555,82 @@ func TestSettingsFontSize(t *testing.T) {
 	tt.Frame()
 	if saved() != 19 || a.fontSizeText != "19" {
 		t.Errorf("saved size %v, field %q, after the stepper's down arrow", saved(), a.fontSizeText)
+	}
+}
+
+// Cmd+T makes a tab in the focused workspace, showing its tabs, and
+// Cmd+N a workspace, each giving the keyboard to the terminal, wherever
+// the focus is; Cmd+W closes the focused tab once confirmed.
+func TestFileCommands(t *testing.T) {
+	a := &app{
+		term:         term.New(settings{}.terminalFont()),
+		sidebarWidth: 240,
+		collapsed:    map[string]bool{"w2": true},
+		snap: endpoint.Snapshot{
+			FocusedWorkspace: "w2", FocusedTab: "w2:t1",
+			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
+			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}, {ID: "w2:t1", Workspace: "w2"}},
+			Panes: []endpoint.Pane{{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
+				{ID: "w2:p1", Workspace: "w2", Tab: "w2:t1", Cwd: "/srv/web"}},
+		},
+	}
+	tt := ui.NewTester(a.view, 1000, 600)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyT)
+	if a.collapsed["w2"] {
+		t.Error("Cmd+T in the terminal left w2's tabs hidden")
+	}
+
+	a.collapse("w2", true)
+	if err := tt.Click("/srv/api"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.Focused("Terminal") {
+		t.Fatal("a click on a tab left the keyboard to the terminal")
+	}
+	tt.Key(ui.Cmd, ui.KeyT)
+	tt.Frame()
+	if a.collapsed["w2"] || !tt.Focused("Terminal") {
+		t.Errorf("Cmd+T in the sidebar: w2 collapsed %v, terminal focused %v", a.collapsed["w2"], tt.Focused("Terminal"))
+	}
+
+	if err := tt.Click("/srv/api"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyN)
+	tt.Frame()
+	if !tt.Focused("Terminal") {
+		t.Error("Cmd+N in the sidebar left the keyboard there")
+	}
+
+	tt.Key(ui.Cmd, ui.KeyW)
+	if !tt.HasText("Close “/srv/web”?") {
+		t.Errorf("Cmd+W: no confirmation in %q", tt.Texts())
+	}
+}
+
+// Cmd+Shift+[ and ] go around the focused workspace's tabs, Cmd+1 to 8 to
+// one of them, Cmd+9 to its last.
+func TestSwitchTab(t *testing.T) {
+	a := &app{snap: endpoint.Snapshot{
+		FocusedWorkspace: "w2", FocusedTab: "w2:t1",
+		Tabs: []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}, {ID: "w2:t1", Workspace: "w2"},
+			{ID: "w2:t2", Workspace: "w2"}, {ID: "w2:t3", Workspace: "w2"}},
+	}}
+	for _, c := range []struct {
+		got, want string
+	}{
+		{a.tabBeside(1), "w2:t2"}, {a.tabBeside(-1), "w2:t3"}, {a.tabBeside(3), "w2:t1"},
+		{a.tabNumber(2), "w2:t2"}, {a.tabNumber(9), "w2:t3"}, {a.tabNumber(4), ""},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %q, want %q", c.got, c.want)
+		}
+	}
+	a.snap.FocusedTab = ""
+	if got := a.tabBeside(1); got != "" {
+		t.Errorf("with no tab focused, the next is %q", got)
 	}
 }

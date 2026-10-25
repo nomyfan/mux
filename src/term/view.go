@@ -93,6 +93,9 @@ func (v *View) SetThemes(light, dark *terminal.Theme) {
 	v.light, v.dark = newPalette(light, false), newPalette(dark, true)
 }
 
+// Focus gives the keyboard to the view as it builds next.
+func (v *View) Focus() { v.refocus = true }
+
 // Reconnected forgets the size and colors the view gave a connection that
 // ended, so that it gives the next one its own.
 func (v *View) Reconnected() { v.asked, v.toldTheme = endpoint.Size{}, nil }
@@ -188,6 +191,11 @@ func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hook
 	}
 	e.HandleInput(v.input)
 	e.OnShortcut(ui.Cmd, ui.KeyF, func() { v.openSearch(c) })
+	for _, m := range paneMoves {
+		for _, a := range arrows {
+			e.OnShortcut(ui.Cmd|m.mods, a.key, func() { v.toward(m.method, a.direction) })
+		}
+	}
 	e.Draw(v.paint)
 	boxes := v.boxes()
 	e.Children(func() {
@@ -291,6 +299,34 @@ func (v *View) send(events ...endpoint.InputEvent) {
 	for _, p := range v.surface.Panes {
 		if p.Focused {
 			v.ep.Input(p.ID, events...)
+			return
+		}
+	}
+}
+
+// arrows are the arrow keys, by the directions they say.
+var arrows = []struct {
+	key       ui.Key
+	direction string
+}{{ui.KeyLeft, "left"}, {ui.KeyRight, "right"}, {ui.KeyUp, "up"}, {ui.KeyDown, "down"}}
+
+// paneMoves are what Command and an arrow, with the modifiers beside, ask
+// the server of the focused pane, toward the arrow: to focus the pane
+// beside it, or to swap places with that pane.
+var paneMoves = []struct {
+	mods   ui.Modifiers
+	method string
+}{{0, "pane.focus_direction"}, {ui.Alt, "pane.swap"}}
+
+// toward asks the server for method on the focused pane toward direction,
+// which does nothing where no pane is there.
+func (v *View) toward(method, direction string) {
+	if v.surface == nil {
+		return
+	}
+	for _, p := range v.surface.Panes {
+		if p.Focused {
+			v.hooks.Request(method, map[string]any{"pane_id": p.ID, "direction": direction}, nil)
 			return
 		}
 	}

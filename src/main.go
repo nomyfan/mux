@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -125,17 +126,16 @@ var (
 	// it (iconOver).
 	blankIcon = icon("")
 
-	branchIcon       = icon(`<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-2 3.5-7 4"/>`)
-	splitRightIcon   = icon(`<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M8 2.5v11"/>`)
-	splitDownIcon    = icon(`<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 8h13"/>`)
-	zoomIcon         = icon(`<path d="M9.5 2.5h4v4M13.5 2.5l-4.5 4.5M6.5 13.5h-4v-4M2.5 13.5l4.5-4.5"/>`)
-	unzoomIcon       = icon(`<path d="M13.5 6.5h-4v-4M9.5 6.5l4-4M2.5 9.5h4v4M6.5 9.5l-4 4"/>`)
-	closeIcon        = icon(`<path d="M4 4l8 8M12 4l-8 8"/>`)
-	moreIcon         = icon(`<path stroke-width="2" d="M3.5 8h.01M8 8h.01M12.5 8h.01"/>`)
-	newTabIcon       = icon(`<path d="M8 3v10M3 8h10"/>`)
-	newWorkspaceIcon = icon(`<path d="M1.5 4.5a1 1 0 011-1h3l1.5 1.5h6.5a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/><path d="M8 7.5v4M6 9.5h4"/>`)
-	collapseIcon     = icon(`<path d="M4 6l4 4 4-4"/>`)
-	expandIcon       = icon(`<path d="M6 4l4 4-4 4"/>`)
+	branchIcon     = icon(`<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-2 3.5-7 4"/>`)
+	splitRightIcon = icon(`<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M8 2.5v11"/>`)
+	splitDownIcon  = icon(`<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 8h13"/>`)
+	zoomIcon       = icon(`<path d="M9.5 2.5h4v4M13.5 2.5l-4.5 4.5M6.5 13.5h-4v-4M2.5 13.5l4.5-4.5"/>`)
+	unzoomIcon     = icon(`<path d="M13.5 6.5h-4v-4M9.5 6.5l4-4M2.5 9.5h4v4M6.5 9.5l-4 4"/>`)
+	closeIcon      = icon(`<path d="M4 4l8 8M12 4l-8 8"/>`)
+	moreIcon       = icon(`<path stroke-width="2" d="M3.5 8h.01M8 8h.01M12.5 8h.01"/>`)
+	newTabIcon     = icon(`<path d="M8 3v10M3 8h10"/>`)
+	collapseIcon   = icon(`<path d="M4 6l4 4 4-4"/>`)
+	expandIcon     = icon(`<path d="M6 4l4 4-4 4"/>`)
 )
 
 //go:embed icons/agents/*.svg
@@ -168,6 +168,29 @@ func (a *app) view(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.openSettings()
 	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter) {
+		if p, ok := a.focusedPane(); ok {
+			a.request("pane.zoom", map[string]any{"pane_id": p.ID, "mode": "toggle"}, nil)
+		}
+	}
+	for _, fc := range a.fileCommands() {
+		if c.Shortcut(fc.mods, fc.key) {
+			fc.run()
+		}
+	}
+	// Command-Shift-[ and ] go to the workspace's tab before and after the
+	// focused one, Command-1 to 8 to its first eight, Command-9 to its last.
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketLeft) {
+		a.focusTab(a.tabBeside(-1))
+	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketRight) {
+		a.focusTab(a.tabBeside(1))
+	}
+	for i, k := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
+		if c.Shortcut(ui.Cmd, k) {
+			a.focusTab(a.tabNumber(i + 1))
+		}
+	}
 	t := c.Theme()
 	bar := c.TitleBar()
 	row := ui.Row(c).Fill().AlignItems(ui.Stretch)
@@ -177,7 +200,7 @@ func (a *app) view(c *ui.Context) {
 		w := a.sidebarWidth * shown
 		ui.Row(c).Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
 			ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth).Background(t.Surface).
-				Children(func() { a.sidebar(c, w) })
+				Children(func() { a.sidebar(c) })
 		})
 		if w > 0 {
 			ui.Box(c).Width(1).Background(t.Border)
@@ -224,20 +247,9 @@ func (a *app) view(c *ui.Context) {
 }
 
 // sidebar is the session's panes by workspace, under the room the window
-// controls take, as much of it as shows: w wide.
-func (a *app) sidebar(c *ui.Context, w float32) {
-	ui.Row(c).Height(a.titleBand(c)).Shrink(0).AlignItems(ui.Center).Padding(0, 8, 0, 0).DragWindow().Children(func() {
-		ui.Spacer(c)
-		// The button fades out as the sliding sidebar takes it toward the
-		// window controls and the sidebar's toggle, rather than across them.
-		const fade = 24
-		controls := c.TitleBar().Left + 8 + 32
-		b := iconButton(c, "new-workspace", newWorkspaceIcon, "New Workspace")
-		b.Opacity(min(max((w-8-26-controls-4)/fade, 0), 1))
-		if b.Clicked() {
-			a.newWorkspace()
-		}
-	})
+// controls take.
+func (a *app) sidebar(c *ui.Context) {
+	ui.Box(c).Height(a.titleBand(c)).Shrink(0).DragWindow()
 	ui.Sidebar(c, &a.chosen, func() {
 		prev := ""
 		for _, ws := range a.snap.Workspaces {
@@ -440,9 +452,7 @@ func (a *app) workspaceHeader(c *ui.Context, ws endpoint.Workspace, open bool) {
 		}
 		actions.Children(func() {
 			if headerButton(c, "new-tab", newTabIcon, "New Tab") {
-				a.request("tab.create", map[string]any{"workspace_id": ws.ID, "focus": true}, nil)
-				// The new tab's pane shows.
-				a.collapse(ws.ID, false)
+				a.newTab(ws.ID)
 			}
 			iconButton(c, "more", moreIcon, "Workspace Actions").Menu(a.workspaceMenu(ws))
 			arrow, label := collapseIcon, "Collapse"
@@ -474,23 +484,14 @@ func (a *app) tabItem(c *ui.Context, tab endpoint.Tab) {
 		}
 	}
 	status := urgentStatus(agents)
-	shown := paneLabel(pane)
-	if isAgent && pane.Label == "" {
-		shown = cmp.Or(agent.Agent, shown)
-	}
-	// herdr names a tab by its number, until it is given a name.
-	name := tab.Label
-	if _, err := strconv.Atoi(name); err == nil {
-		name = ""
-	}
-	label := cmp.Or(name, shown)
+	name, shown := a.tabNames(tab)
 	icon, mark := itemIcon(agent, isAgent)
 	if a.renaming == tab.ID {
 		a.renameTab(c, tab, icon, mark, name, shown)
 		return
 	}
-	closeTab := func() { a.confirmClose(closing{label, "tab.close", map[string]any{"tab_id": tab.ID}}) }
-	item := ui.SidebarItem(c.Key(tab.ID), tab.ID, blankIcon, label).ContextMenu(func(m *ui.Menu) {
+	closeTab := func() { a.closeTab(tab) }
+	item := ui.SidebarItem(c.Key(tab.ID), tab.ID, blankIcon, cmp.Or(name, shown)).ContextMenu(func(m *ui.Menu) {
 		if m.Item("Rename").Chosen() {
 			a.renaming, a.newLabel = tab.ID, name
 		}
@@ -518,6 +519,28 @@ func (a *app) tabItem(c *ui.Context, tab endpoint.Tab) {
 			statusDot(c, status)
 		}
 	})
+}
+
+// tabNames returns the name a tab was given, if any, and what it shows
+// without one: its active pane's name, its agent, or its directory.
+func (a *app) tabNames(tab endpoint.Tab) (name, shown string) {
+	pane := a.activePane(tab.ID)
+	shown = paneLabel(pane)
+	if agent, isAgent := a.agentIn(pane.ID); isAgent && pane.Label == "" {
+		shown = cmp.Or(agent.Agent, shown)
+	}
+	// herdr names a tab by its number, until it is given a name.
+	name = tab.Label
+	if _, err := strconv.Atoi(name); err == nil {
+		name = ""
+	}
+	return name, shown
+}
+
+// closeTab closes a tab, once the user confirms.
+func (a *app) closeTab(tab endpoint.Tab) {
+	name, shown := a.tabNames(tab)
+	a.confirmClose(closing{cmp.Or(name, shown), "tab.close", map[string]any{"tab_id": tab.ID}})
 }
 
 // urgentStatus is the state of the agent that most needs the user: one
@@ -574,24 +597,139 @@ func (a *app) renameTab(c *ui.Context, tab endpoint.Tab, icon, mark *ui.SVG, nam
 	})
 }
 
-// newWorkspace asks the user for a folder, in which it makes a workspace,
-// named after the folder, which it focuses.
+// newTab makes a tab in a workspace and focuses it, giving its pane the
+// keyboard. Where it starts is the server's to choose, as herdr's new_cwd
+// says: by default, where the workspace's focused pane is.
+func (a *app) newTab(workspaceID string) {
+	if workspaceID == "" {
+		return
+	}
+	a.request("tab.create", map[string]any{"workspace_id": workspaceID, "focus": true}, nil)
+	// The new tab's pane shows.
+	a.collapse(workspaceID, false)
+	a.term.Focus()
+}
+
+// newWorkspace makes a workspace and focuses it, as newTab does a tab:
+// by default, where the focused pane is.
 func (a *app) newWorkspace() {
-	win := a.win
-	go func() {
-		home, _ := os.UserHomeDir()
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "New Workspace",
-			Message: "Choose the folder the workspace works in.", ButtonLabel: "Create",
-			DefaultPath: home, Directory: true, CreateDirectories: true})
-		win.Update(func() {
-			switch {
-			case err != nil:
-				a.err = err.Error()
-			case len(paths) > 0:
-				a.request("workspace.create", map[string]any{"cwd": paths[0], "focus": true}, nil)
+	params := map[string]any{"focus": true}
+	if ws := a.snap.FocusedWorkspace; ws != "" {
+		params["source_workspace_id"] = ws
+	}
+	a.request("workspace.create", params, nil)
+	a.term.Focus()
+}
+
+// fileCommand is a command of the File menu, which takes its key before
+// the view on macOS: there the menu runs it, elsewhere the view.
+type fileCommand struct {
+	label string
+	mods  ui.Modifiers
+	key   ui.Key
+	accel string // the menu's spelling of mods and key
+	run   func()
+	group bool // whether a separator comes before it
+}
+
+func (a *app) fileCommands() []fileCommand {
+	return []fileCommand{
+		{label: "New Tab", mods: ui.Cmd, key: ui.KeyT, accel: "CmdOrCtrl+T", run: func() { a.newTab(a.snap.FocusedWorkspace) }},
+		{label: "New Workspace", mods: ui.Cmd, key: ui.KeyN, accel: "CmdOrCtrl+N", run: a.newWorkspace},
+		// Closing a tab asks first; a pane closes at once, on the chord
+		// harder to press by mistake.
+		{label: "Close Tab…", mods: ui.Cmd, key: ui.KeyW, accel: "CmdOrCtrl+W", run: a.closeFocusedTab, group: true},
+		{label: "Close Pane", mods: ui.Cmd | ui.Shift, key: ui.KeyW, accel: "Shift+CmdOrCtrl+W", run: a.closeFocusedPane},
+	}
+}
+
+// menu is macOS's standard menu bar with the File menu of fileCommands,
+// whose Command-W closes a tab rather than the window. The commands wait
+// while a dialog shows, as the view's shortcuts do.
+func (a *app) menu() *mygo.Menu {
+	var file []*mygo.MenuItem
+	for _, fc := range a.fileCommands() {
+		if fc.group {
+			file = append(file, mygo.Separator())
+		}
+		file = append(file, &mygo.MenuItem{Label: fc.label, Accelerator: fc.accel, Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.win.Update(func() {
+				if !a.settingsOpen && !a.confirming && !a.stopping {
+					fc.run()
+				}
+			})
+		}})
+	}
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{Role: mygo.RoleAppMenu},
+		{Label: "File", Submenu: file},
+		{Role: mygo.RoleEditMenu},
+		{Role: mygo.RoleViewMenu},
+		{Role: mygo.RoleWindowMenu},
+	})
+}
+
+// closeFocusedPane closes the focused pane of the tab shown, as its
+// header's button does.
+func (a *app) closeFocusedPane() {
+	if p, ok := a.focusedPane(); ok {
+		a.request("pane.close", map[string]any{"pane_id": p.ID}, nil)
+	}
+}
+
+// closeFocusedTab closes the focused tab, once the user confirms.
+func (a *app) closeFocusedTab() {
+	for _, tab := range a.snap.Tabs {
+		if tab.ID == a.snap.FocusedTab {
+			a.closeTab(tab)
+		}
+	}
+}
+
+// workspaceTabs returns the focused workspace's tabs, in the sidebar's
+// order, with the place of the focused one among them, -1 if none.
+func (a *app) workspaceTabs() (tabs []endpoint.Tab, focused int) {
+	focused = -1
+	for _, tab := range a.snap.Tabs {
+		if tab.Workspace == a.snap.FocusedWorkspace {
+			if tab.ID == a.snap.FocusedTab {
+				focused = len(tabs)
 			}
-		})
-	}()
+			tabs = append(tabs, tab)
+		}
+	}
+	return tabs, focused
+}
+
+// tabBeside returns the tab step places after the focused one in its
+// workspace, around from the last to the first, or "" if none.
+func (a *app) tabBeside(step int) string {
+	tabs, i := a.workspaceTabs()
+	if i < 0 {
+		return ""
+	}
+	n := len(tabs)
+	return tabs[((i+step)%n+n)%n].ID
+}
+
+// tabNumber returns the focused workspace's nth tab, from 1, its last for
+// 9, or "" if none.
+func (a *app) tabNumber(n int) string {
+	tabs, _ := a.workspaceTabs()
+	if n == 9 {
+		n = len(tabs)
+	}
+	if n < 1 || n > len(tabs) {
+		return ""
+	}
+	return tabs[n-1].ID
+}
+
+// focusTab focuses a tab, if any other than the focused one.
+func (a *app) focusTab(id string) {
+	if id != "" && id != a.snap.FocusedTab {
+		a.request("tab.focus", map[string]string{"tab_id": id}, nil)
+	}
 }
 
 // workspaceMenu builds the menu of a workspace's actions.
@@ -958,14 +1096,21 @@ func (a *app) split(paneID, direction string) {
 
 // splitFocused splits the focused pane of the tab shown.
 func (a *app) splitFocused(direction string) {
-	if a.surface == nil {
-		return
+	if p, ok := a.focusedPane(); ok {
+		a.split(p.ID, direction)
 	}
-	for _, p := range a.surface.Panes {
-		if p.Focused {
-			a.split(p.ID, direction)
+}
+
+// focusedPane returns the focused pane of the tab shown.
+func (a *app) focusedPane() (endpoint.SurfacePane, bool) {
+	if a.surface != nil {
+		for _, p := range a.surface.Panes {
+			if p.Focused {
+				return p, true
+			}
 		}
 	}
+	return endpoint.SurfacePane{}, false
 }
 
 func (a *app) focusPane(id string) { a.request("pane.focus", map[string]string{"pane_id": id}, nil) }
@@ -1117,6 +1262,11 @@ func main() {
 	}
 	a := &app{socket: socket, sidebarWidth: 240, settings: loadSettings()}
 	a.term = term.New(a.settings.terminalFont())
+	// Only macOS: elsewhere the menu would add a bar to the window, and the
+	// view takes the File menu's keys.
+	if runtime.GOOS == "darwin" {
+		mygo.App.SetMenu(a.menu())
+	}
 	// The app starts in the appearance the user chose.
 	mygo.Theme.SetSource(a.settings.Appearance)
 	a.term.SetThemes(lightTerminal, darkTerminal)

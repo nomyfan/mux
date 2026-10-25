@@ -100,3 +100,34 @@ func TestHeaderFocus(t *testing.T) {
 		t.Errorf("a press on p2's header focused %q", focused)
 	}
 }
+
+// Command with an arrow asks the server to focus the pane beside the
+// focused one, with Option to swap it there; in the search field it moves
+// the caret instead.
+func TestPaneMoves(t *testing.T) {
+	_, _, tt, calls := searchView(t)
+	tt.Key(ui.Cmd, ui.KeyRight)
+	tt.Key(ui.Cmd|ui.Ctrl, ui.KeyLeft)
+	tt.Key(ui.Cmd|ui.Alt, ui.KeyDown)
+	want := []struct{ method, direction string }{
+		{"pane.focus_direction", "right"}, {"pane.swap", "down"},
+	}
+	if len(*calls) != len(want) {
+		t.Fatalf("made %d requests, want %d", len(*calls), len(want))
+	}
+	for i, w := range want {
+		c := (*calls)[i]
+		if c.method != w.method || c.params["pane_id"] != "p1" || c.params["direction"] != w.direction {
+			t.Errorf("request %d: %+v, want %v", i, c, w)
+		}
+	}
+	tt.Key(ui.Cmd, ui.KeyF)
+	tt.Frame()
+	n := len(*calls)
+	tt.Key(ui.Cmd, ui.KeyLeft)
+	for _, c := range (*calls)[n:] {
+		if c.method == "pane.focus_direction" {
+			t.Errorf("Cmd+Left in the search field moved the focus: %+v", c)
+		}
+	}
+}

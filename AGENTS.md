@@ -25,7 +25,7 @@ The app itself: top-level UI and app state.
 
 - `main.go`:
   - Creates the window. On macOS the title bar is hidden and the traffic lights sit over the sidebar, centered on the pane headers.
-  - The sidebar groups tabs by workspace and has a list of agents with breathing status dots. Workspaces, tabs and panes can be renamed in place, collapsed and created; closing asks for confirmation.
+  - The sidebar groups tabs by workspace and has a list of agents with breathing status dots. Workspaces, tabs and panes can be renamed in place, collapsed and created; closing asks for confirmation. Cmd+T makes a tab in the focused workspace, Cmd+N a workspace, Cmd+W closes the focused tab (confirmed) and Cmd+Shift+W the focused pane; on macOS these four sit in the app's own File menu, as the default one's Close Window would take Cmd+W. Cmd+Shift+[ / ] go around the focused workspace's tabs, Cmd+1–8 to one of them and Cmd+9 to its last; Cmd+Shift+Enter zooms the focused pane. New tabs, workspaces and split panes pass no `cwd`, only where they come from, so herdr's `[terminal] new_cwd` decides where they start (by default, the source pane's directory).
   - Pane headers carry the split, zoom and close buttons.
   - A background goroutine connects to the endpoint and reconnects every second after a drop. Messages it reads go into an inbox and reach the main thread through `Window.Update`, a batch at a time.
   - Request queue: the endpoint handles one request at a time (otherwise it answers `endpoint_busy`), so requests wait here and the next is sent once the previous one is answered.
@@ -54,7 +54,7 @@ Starts and stops the herdr server. No UI dependency.
 
 Paints the terminals and handles their input. It never parses program output; it paints the cells the server already laid out.
 
-- `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `SetFont` changes the font at run time; the new cell size reaches the server on the next layout. `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`.
+- `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `SetFont` changes the font at run time; the new cell size reaches the server on the next layout. `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane, as the server finds it (`pane.focus_direction`, `pane.swap`).
 - `paint.go` / `color.go`: paint cells, search highlights and the selection. Colors use a 256-color palette (the theme's 16 plus xterm's color cube and grays) and cell styles such as bold, italic and reverse.
 - `layout.go`: computes each pane's card, header and content boxes. herdr leaves a border row above and below split panes, which the header takes.
 - `keys.go`: maps `ui.Key` to endpoint keys. Keys that type text go as text input; Cmd chords are kept for the app.
