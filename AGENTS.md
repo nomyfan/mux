@@ -55,7 +55,7 @@ Starts and stops the herdr server. No UI dependency.
 Paints the terminals and handles their input. It never parses program output; it paints the cells the server already laid out.
 
 - `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `SetFont` changes the font at run time; the new cell size reaches the server on the next layout. `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane, as the server finds it (`pane.focus_direction`, `pane.swap`).
-- `paint.go` / `color.go`: paint cells, search highlights and the selection. Colors use a 256-color palette (the theme's 16 plus xterm's color cube and grays) and cell styles such as bold, italic and reverse.
+- `paint.go` / `color.go`: paint cells, search highlights, the selection and the cursor, in the shape the program sets (DECSCUSR) and blinking when that shape does. Colors use a 256-color palette (the theme's 16 plus xterm's color cube and grays) and cell styles such as bold, italic and reverse.
 - `layout.go`: computes each pane's card, header and content boxes. herdr leaves a border row above and below split panes, which the header takes.
 - `keys.go`: maps `ui.Key` to endpoint keys. Keys that type text go as text input; Cmd chords are kept for the app.
 - `select.go`: text selection and copy. The selection stays with the text as it scrolls.

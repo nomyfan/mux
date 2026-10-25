@@ -131,3 +131,47 @@ func TestPaneMoves(t *testing.T) {
 		}
 	}
 }
+
+// A blinking cursor hides and shows every blinkPeriod, shows again as the
+// user types, and stays after blinkFor; a steady one stays.
+func TestCursorBlink(t *testing.T) {
+	for _, tc := range []struct {
+		shape uint8
+		blink bool
+	}{{0, true}, {1, true}, {2, false}, {5, true}, {6, false}} {
+		s := &endpoint.Surface{
+			Frame: endpoint.Frame{Width: 20, Height: 5, Cells: make([]endpoint.Cell, 20*5),
+				Cursor: &endpoint.Cursor{X: 2, Y: 1, Visible: true, Shape: tc.shape}},
+			Panes: []endpoint.SurfacePane{
+				{ID: "p1", Focused: true, Rect: endpoint.Rect{Width: 20, Height: 5}, Inner: endpoint.Rect{Width: 20, Height: 5}},
+			},
+		}
+		v := New(ui.Font{Size: 14})
+		v.Focus()
+		hooks := Hooks{Header: func(c *ui.Context, p endpoint.SurfacePane, box ui.Rect, hovered bool) {}}
+		tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, nil, hooks).Fill() }, 400, 200)
+		tt.Frame()
+		tt.Frame()
+		r := v.cellRect(ui.Rect{}, 2, 1)
+		// The bar's and the block's left edge.
+		pixel := func() uint32 {
+			i := tt.Image()
+			c := i.RGBAAt(int(r.X)+1, int(r.Y+r.H/2))
+			return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
+		}
+		shown := pixel()
+		tt.Advance(blinkPeriod)
+		if hidden := pixel(); (hidden != shown) != tc.blink {
+			t.Errorf("shape %d: %06x after %v, %06x before", tc.shape, hidden, blinkPeriod, shown)
+		}
+		tt.Type("a")
+		tt.Frame()
+		if got := pixel(); got != shown {
+			t.Errorf("shape %d: %06x as the user types, want %06x", tc.shape, got, shown)
+		}
+		tt.Advance(blinkFor + blinkPeriod)
+		if got := pixel(); got != shown {
+			t.Errorf("shape %d: %06x after %v, want %06x", tc.shape, got, blinkFor, shown)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package term
 
 import (
 	"cmp"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -188,9 +189,10 @@ func wide(symbol string) bool {
 }
 
 // paintCursor draws the cursor in its shape (DECSCUSR: a block for 0 to 2,
-// an underline for 3 and 4, a bar for 5 and 6), hollow while the view does
-// not have the focus, and an input method's composition at it. On a wide
-// character the cursor covers both of its cells.
+// an underline for 3 and 4, a bar for 5 and 6), blinking for 0 and the odd
+// ones, hollow and steady while the view does not have the focus, and an
+// input method's composition at it. On a wide character the cursor covers
+// both of its cells.
 func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 	cur := v.cursor()
 	if cur == nil {
@@ -221,6 +223,9 @@ func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 		p.Stroke(box, color, 0, 1)
 		return
 	}
+	if !v.blinkOn(p, cur.Shape) {
+		return
+	}
 	switch cur.Shape {
 	case 3, 4:
 		p.Fill(ui.Rect{X: box.X, Y: box.Y + v.cellH - 2, W: box.W, H: 2}, color, 0)
@@ -237,6 +242,29 @@ func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 			p.Glyphs(v.shape(c.Symbol, c.Modifier), box.X, box.Y+v.baseline, text)
 		}
 	}
+}
+
+// A blinking cursor shows for blinkPeriod and hides for as long, as MyGo's
+// text caret does, for blinkFor after it moves or the user types; then it
+// stays.
+const (
+	blinkPeriod = 530 * time.Millisecond
+	blinkFor    = 30 * time.Second
+)
+
+// blinkOn reports whether a cursor of shape shows in the frame p paints,
+// and asks for the frame where that changes. DECSCUSR's 0, the terminal's
+// default, blinks as xterm's does.
+func (v *View) blinkOn(p *ui.Painter, shape uint8) bool {
+	if shape > 6 || shape != 0 && shape%2 == 0 {
+		return true
+	}
+	phase := p.Now().Sub(v.blink.from)
+	if phase >= blinkFor {
+		return true
+	}
+	p.After(blinkPeriod - phase%blinkPeriod)
+	return phase/blinkPeriod%2 == 0
 }
 
 // shape returns the glyphs of a cell's symbol in its style, which the

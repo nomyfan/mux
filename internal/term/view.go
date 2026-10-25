@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
@@ -57,6 +58,15 @@ type View struct {
 	refocus      bool // to give the keyboard back to the view
 	services     ui.Services
 	focused      bool
+	blink        blink
+}
+
+// blink is what a blinking cursor counts from: when it last moved or the
+// user typed, the cursor then and whether the view had the focus.
+type blink struct {
+	from    time.Time
+	cursor  endpoint.Cursor
+	focused bool
 }
 
 type glyphKey struct {
@@ -180,6 +190,11 @@ func (v *View) Build(c *ui.Context, s *endpoint.Surface, ep Endpoint, hooks Hook
 	v.grew = v.grow
 	if cur := v.cursor(); cur != nil {
 		e.TextCaret(v.cellRect(ui.Rect{}, int(cur.X), int(cur.Y)))
+		if *cur != v.blink.cursor || v.focused != v.blink.focused {
+			v.blink = blink{c.Now(), *cur, v.focused}
+		}
+	} else {
+		v.blink.cursor = endpoint.Cursor{}
 	}
 	if v.selecting {
 		// The text under the pointer moves as the pane scrolls.
@@ -339,6 +354,7 @@ func (v *View) input(ev ui.InputEvent) bool {
 		if !v.focused {
 			return false
 		}
+		v.blink.from = ev.Time
 	}
 	switch ev.Kind {
 	case ui.InputKeyDown:
