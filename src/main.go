@@ -21,12 +21,20 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"mux/src/herdr/endpoint"
+	"mux/src/herdr/server"
 	"mux/src/term"
 )
 
 type app struct {
 	socket string
 	win    *mygo.Window
+	// serverDown is set as no server listens on the socket; starting while
+	// the app starts one, and stopping while the user confirms stopping it.
+	// serverErr is why starting or stopping it failed.
+	serverDown bool
+	starting   bool
+	stopping   bool
+	serverErr  string
 	// conn is the connection to herdr's client endpoint, nil while there is
 	// none; snap and surface are what it last showed.
 	conn    *endpoint.Conn
@@ -58,6 +66,25 @@ type app struct {
 	// confirm while confirming.
 	closing    *closing
 	confirming bool
+	// settings are the user's, which the settings dialog shows while
+	// settingsOpen, on settingsPage, its appearance control choosing
+	// appearance.
+	settings     settings
+	settingsOpen bool
+	settingsPage string
+	appearance   int
+	// terminalFamily and fallbackFamily are the font families the font
+	// controls choose: the first among monoFonts, the system's monospaced
+	// families, the other among allFonts, all its families.
+	terminalFamily string
+	fallbackFamily string
+	monoFonts      []string
+	allFonts       []string
+	// fontSize is the terminals' font size the size control chooses, and
+	// fontSizeText what its field shows.
+	fontSize      float64
+	fontSizeText  string
+	fontSizeInput ui.Handle
 
 	// queue holds the requests waiting to be sent: the endpoint takes one
 	// at a time, refusing another until it has answered (endpoint_busy).
@@ -138,6 +165,9 @@ func (a *app) view(c *ui.Context) {
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyD) {
 		a.splitFocused("down")
 	}
+	if c.Shortcut(ui.Cmd, ui.KeyComma) {
+		a.openSettings()
+	}
 	t := c.Theme()
 	bar := c.TitleBar()
 	row := ui.Row(c).Fill().AlignItems(ui.Stretch)
@@ -189,6 +219,8 @@ func (a *app) view(c *ui.Context) {
 	if toggle.Clicked() {
 		a.sidebarHidden = !a.sidebarHidden
 	}
+	a.settingsDialog(c)
+	a.confirmStopServer(c)
 }
 
 // sidebar is the session's panes by workspace, under the room the window
@@ -226,7 +258,8 @@ func (a *app) sidebar(c *ui.Context, w float32) {
 			})
 		}
 	}).Grow(1).Label("Tabs and Agents").OnChange(a.focusChosen)
-	if a.err != "" {
+	// Without a server, the panes' room says so.
+	if a.err != "" && !a.serverDown {
 		ui.Text(c, a.err).FontSize(12).TextColor(c.Theme().Danger).Padding(8, 12)
 	}
 	if cl := a.closing; cl != nil {
@@ -633,6 +666,10 @@ func (a *app) pane(c *ui.Context, titleLeft float32) {
 		// The root split's path is empty, not missing.
 		a.request("layout.set_split_ratio", map[string]any{"pane_id": paneID, "path": append([]bool{}, path...), "ratio": ratio}, nil)
 	}
+	if a.conn == nil && a.serverDown {
+		a.serverDownView(c)
+		return
+	}
 	hooks := term.Hooks{Header: header, Focus: a.focusPane, Resize: resize, Request: a.request,
 		Title:     func(c *ui.Context, p endpoint.SurfacePane) { a.paneTitle(c, p, false) },
 		Rearrange: a.rearrange}
@@ -988,11 +1025,6 @@ func (a *app) answer(c endpoint.ResponseChunk) {
 	}
 }
 
-// terminalFont is the terminals' font until a configuration file sets it:
-// the families after the first fill in the glyphs it lacks, as the Nerd
-// Font's symbols, before the system's fallback fonts.
-var terminalFont = ui.Font{Family: "Berkeley Mono, BlexMono Nerd Font Mono", Size: 14}
-
 // connect keeps a connection to the endpoint, connecting again a second
 // after one fails or ends.
 func (a *app) connect(win *mygo.Window) {
@@ -1000,9 +1032,15 @@ func (a *app) connect(win *mygo.Window) {
 		// The view asks for its own size once it has the connection.
 		conn, err := endpoint.Dial(a.socket, endpoint.Size{Cols: 80, Rows: 24, CellWidth: 8, CellHeight: 16})
 		if err == nil {
-			win.Update(func() { a.conn, a.err = conn, ""; a.term.Reconnected() })
+			win.Update(func() {
+				a.conn, a.err, a.serverDown, a.starting, a.serverErr = conn, "", false, false, ""
+				a.term.Reconnected()
+			})
 			err = a.read(win, conn)
 			conn.Close()
+		} else if server.NotRunning(err) {
+			// What the server showed went with it.
+			win.Update(func() { a.serverDown, a.snap = true, endpoint.Snapshot{} })
 		}
 		msg := err.Error()
 		// The requests the connection took get no response.
@@ -1076,7 +1114,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a := &app{socket: socket, term: term.New(terminalFont), sidebarWidth: 240}
+	a := &app{socket: socket, sidebarWidth: 240, settings: loadSettings()}
+	a.term = term.New(a.settings.terminalFont())
+	// The app starts in the appearance the user chose.
+	mygo.Theme.SetSource(a.settings.Appearance)
 	a.term.SetThemes(lightTerminal, darkTerminal)
 	center := a.term.HeaderCenter()
 	mygo.App.WhenReady(func() {
@@ -1100,6 +1141,19 @@ func main() {
 		})
 		a.win = win
 		go a.connect(win)
+		// The settings offer the font families, after the choices for none
+		// of the user's; listing them takes a while with many fonts
+		// installed.
+		go func() {
+			mono, all := []string{systemFont}, []string{noFont}
+			for _, f := range ui.FontFamilies() {
+				all = append(all, f.Name)
+				if f.Monospaced {
+					mono = append(mono, f.Name)
+				}
+			}
+			win.Update(func() { a.monoFonts, a.allFonts = mono, all })
+		}()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

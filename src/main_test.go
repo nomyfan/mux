@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"mux/src/herdr/endpoint"
@@ -15,7 +16,7 @@ import (
 // its state, others the directory of their first pane, unless named.
 func TestSidebar(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
@@ -51,7 +52,7 @@ func TestSidebar(t *testing.T) {
 
 // Cmd+B and the title bar's button hide the sidebar and show it again.
 func TestToggleSidebar(t *testing.T) {
-	a := &app{term: term.New(terminalFont), sidebarWidth: 240}
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Key(ui.Cmd, ui.KeyB)
 	if !a.sidebarHidden {
@@ -67,7 +68,7 @@ func TestToggleSidebar(t *testing.T) {
 
 // Dragging the divider resizes the sidebar, within its bounds.
 func TestResizeSidebar(t *testing.T) {
-	a := &app{term: term.New(terminalFont), sidebarWidth: 240}
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Press(240, 300)
 	tt.Move(300, 300)
@@ -86,7 +87,7 @@ func TestResizeSidebar(t *testing.T) {
 // A click on a workspace's name hides its tabs, and another shows them.
 func TestCollapseWorkspace(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
@@ -120,7 +121,7 @@ func TestCollapseWorkspace(t *testing.T) {
 // A workspace's menu renames it in place, and closes it once confirmed.
 func TestWorkspaceMenu(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
@@ -165,7 +166,7 @@ func TestWorkspaceMenu(t *testing.T) {
 // own name, none for a tab herdr numbers.
 func TestRenameTab(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
@@ -214,7 +215,7 @@ func TestRenameTab(t *testing.T) {
 // first agent's; and the state of its agent most needing the user.
 func TestTabActivePane(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		// The tab's alone, without the list of agents.
 		collapsed: map[string]bool{agentsSection: true},
@@ -255,7 +256,7 @@ func TestTabActivePane(t *testing.T) {
 // Closing a tab, by its button or its menu, asks the user first.
 func TestCloseTabConfirms(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
@@ -295,7 +296,7 @@ func TestCloseTabConfirms(t *testing.T) {
 // clears; meanwhile the title drags the pane no more.
 func TestRenamePane(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 240,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
@@ -334,7 +335,7 @@ func TestRenamePane(t *testing.T) {
 // A moving status dot moves as the window paints again, without the view
 // built again.
 func TestStatusDotMoves(t *testing.T) {
-	a := &app{term: term.New(terminalFont), sidebarWidth: 240, snap: endpoint.Snapshot{
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, snap: endpoint.Snapshot{
 		Workspaces: []endpoint.Workspace{{ID: "w1", Label: "mux"}},
 		Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "1"}},
 		Panes:      []endpoint.Pane{{ID: "p1", Tab: "w1:t1"}},
@@ -357,7 +358,7 @@ func TestStatusDotMoves(t *testing.T) {
 // or their own, beside their workspace; choosing one chooses its pane.
 func TestAgentsList(t *testing.T) {
 	a := &app{
-		term:         term.New(terminalFont),
+		term:         term.New(settings{}.terminalFont()),
 		sidebarWidth: 300,
 		snap: endpoint.Snapshot{
 			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
@@ -393,5 +394,166 @@ func TestAgentsList(t *testing.T) {
 	tt.Frame()
 	if tt.HasText("reviewer") {
 		t.Errorf("collapsed, the agents show: %q", tt.Texts())
+	}
+}
+
+// Cmd+, opens the settings, whose appearance takes effect as it is chosen,
+// and is saved for the next launch.
+func TestSettingsAppearance(t *testing.T) {
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	var source mygo.ThemeSource
+	setThemeSource = func(s mygo.ThemeSource) { source = s }
+	t.Cleanup(func() { setThemeSource = mygo.Theme.SetSource })
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	tt := ui.NewTester(a.view, 1000, 600)
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if !tt.HasText("herdr server") {
+		t.Fatalf("no server settings after Cmd+, in %q", tt.Texts())
+	}
+	if err := tt.Click("Appearance"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Dark"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.settings.Appearance != mygo.ThemeDark || source != mygo.ThemeDark {
+		t.Fatalf("appearance %q, set %q, after choosing Dark", a.settings.Appearance, source)
+	}
+	if s := loadSettings(); s.Appearance != mygo.ThemeDark {
+		t.Errorf("saved appearance %q, not dark", s.Appearance)
+	}
+	// A click outside keeps them open; the close button closes them.
+	tt.ClickAt(20, 580)
+	if !a.settingsOpen {
+		t.Fatal("a click outside closed the settings")
+	}
+	if err := tt.Click("Close"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settingsOpen {
+		t.Fatal("the close button left the settings open")
+	}
+	tt.Key(ui.Cmd, ui.KeyComma)
+	tt.Key(0, ui.KeyEscape)
+	if a.settingsOpen {
+		t.Fatal("Escape left the settings open")
+	}
+	// Opened again, the dialog shows the choice.
+	a.appearance = 0
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if a.appearance != 2 {
+		t.Errorf("appearance control at %d, not Dark", a.appearance)
+	}
+}
+
+// Without a server, the panes' room offers to start one, as the settings
+// do, and the sidebar no longer shows what the server showed.
+func TestServerDown(t *testing.T) {
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, serverDown: true, err: "dial unix: no such file"}
+	tt := ui.NewTester(a.view, 1000, 600)
+	if !tt.HasText("The herdr server isn’t running") {
+		t.Fatalf("no notice in %q", tt.Texts())
+	}
+	if _, ok := tt.Find("Start Server"); !ok {
+		t.Error("no Start Server button")
+	}
+	if tt.HasText(a.err) {
+		t.Error("the dial error shows beside the notice")
+	}
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if !tt.HasText("Not running") {
+		t.Errorf("no server status in %q", tt.Texts())
+	}
+}
+
+// The settings choose the terminals' font among the monospaced families,
+// and save it for the next launch.
+func TestSettingsTerminalFont(t *testing.T) {
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, monoFonts: []string{systemFont, "Berkeley Mono", "Menlo"},
+		allFonts: []string{noFont, "Menlo", "Symbols Nerd Font"}}
+	tt := ui.NewTester(a.view, 1000, 600)
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if err := tt.Click("Appearance"); err != nil {
+		t.Fatal(err)
+	}
+	if f := (settings{}).terminalFont().Family; f != "monospace" {
+		t.Errorf("default terminal font families %q", f)
+	}
+	if a.terminalFamily != systemFont || a.fallbackFamily != noFont {
+		t.Errorf("font controls at %q and %q, not the defaults", a.terminalFamily, a.fallbackFamily)
+	}
+	// The control lines up with the theme's on the right of its row.
+	dark, _ := tt.Find("Dark")
+	label, _ := tt.Find("Terminal Font")
+	note, _ := tt.Find("The monospaced font the terminals use.")
+	tt.ClickAt(dark.X, (label.Y+note.Y+note.H)/2)
+	if err := tt.Click("Menlo"); err != nil {
+		t.Fatalf("%v in %q", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.settings.TerminalFont != "Menlo" {
+		t.Fatalf("terminal font %q after choosing Menlo", a.settings.TerminalFont)
+	}
+	// The fallback font's control lies below.
+	label, _ = tt.Find("Fallback Font")
+	note, _ = tt.Find("Fills in what it lacks, as Nerd Font icons.")
+	tt.ClickAt(dark.X, (label.Y+note.Y+note.H)/2)
+	if err := tt.Click("Symbols Nerd Font"); err != nil {
+		t.Fatalf("%v in %q", err, tt.Texts())
+	}
+	tt.Frame()
+	s := loadSettings()
+	if s.TerminalFont != "Menlo" || s.FallbackFont != "Symbols Nerd Font" {
+		t.Errorf("saved fonts %q and %q", s.TerminalFont, s.FallbackFont)
+	}
+	if f := s.terminalFont().Family; f != "Menlo, Symbols Nerd Font" {
+		t.Errorf("terminal font families %q", f)
+	}
+}
+
+// The settings change the terminals' font size as typed in its field, by
+// steps of the arrows there or of the stepper beside it, and save it.
+func TestSettingsFontSize(t *testing.T) {
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	tt := ui.NewTester(a.view, 1000, 600)
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if err := tt.Click("Appearance"); err != nil {
+		t.Fatal(err)
+	}
+	if a.fontSize != defaultFontSize {
+		t.Errorf("size control at %v, not the default", a.fontSize)
+	}
+	saved := func() float64 { return loadSettings().FontSize }
+	// The field lies under the theme control's last segment, the stepper
+	// right of it.
+	dark, _ := tt.Find("Dark")
+	label, _ := tt.Find("Font Size")
+	note, _ := tt.Find("The terminals’ text size, in points.")
+	y := (label.Y + note.Y + note.H) / 2
+	tt.ClickAt(dark.X, y)
+	tt.Key(0, ui.KeyUp)
+	tt.Key(0, ui.KeyUp)
+	tt.Frame()
+	if saved() != 16 {
+		t.Errorf("saved size %v after two steps up", saved())
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("20")
+	tt.Frame()
+	if saved() != 20 || a.settings.terminalFont().Size != 20 {
+		t.Errorf("saved size %v after typing 20", saved())
+	}
+	tt.Type("0")
+	tt.Frame()
+	if saved() != 20 {
+		t.Errorf("saved size %v after typing 200, out of range", saved())
+	}
+	tt.ClickAt(dark.X+dark.W+6, y+6)
+	tt.Frame()
+	if saved() != 19 || a.fontSizeText != "19" {
+		t.Errorf("saved size %v, field %q, after the stepper's down arrow", saved(), a.fontSizeText)
 	}
 }

@@ -10,13 +10,14 @@ go tool mygo build                 # package the app (.app and .dmg on macOS, in
 go tool mygo vet .                 # go vet plus checks for stored UI build values
 CGO_ENABLED=0 go test ./...        # all tests
 go test ./src/term -run TestSearch # a single test
+scripts/make-icon.sh               # render resources/icon.png and src/icons/app.png from the artwork in design/ (needs ImageMagick)
 ```
 
 `mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./src`) live in `mygo.json`.
 
 ## Modules
 
-Dependencies run `main` → `term` → `herdr/endpoint`; the agent icons are used only by `main`.
+Dependencies run `main` → `term` → `herdr/endpoint`; `herdr/server` and the icons are used only by `main`.
 
 ### `src/` (package `main`)
 
@@ -28,6 +29,8 @@ The app itself: top-level UI and app state.
   - Pane headers carry the split, zoom and close buttons.
   - A background goroutine connects to the endpoint and reconnects every second after a drop. Messages it reads go into an inbox and reach the main thread through `Window.Update`, a batch at a time.
   - Request queue: the endpoint handles one request at a time (otherwise it answers `endpoint_busy`), so requests wait here and the next is sent once the previous one is answered.
+- `settings.go`: the settings dialog (Cmd+,): pages listed on the left (Server, Appearance), the chosen one on the right. Appearance is auto, light or dark, applied through `mygo.Theme.SetSource`, and the terminals' fonts: a family chosen among the system's monospaced ones (default: the system's own, `monospace`) and an optional fallback family, among all of them, for the glyphs the first lacks such as Nerd Font icons (default: none), and their size (8–32, default 14) (`ui.FontFamilies`, listed in the background at startup). They apply at once through `term.View.SetFont`. Settings are saved as `settings.json` in the app's user data directory and applied before the window opens.
+- `server.go`: the herdr server's state in the UI. When no server listens on the socket, the sidebar is emptied and the pane area offers Start Server; the settings' Server page shows the status and starts or stops it (stopping asks for confirmation). The server is shown with the in-app icon `src/icons/app.png`.
 - `theme.go`: the Vellum colors in light and dark. Controls take its Zed colors, terminals its Ghostty colors.
 
 ### `src/herdr/endpoint`
@@ -40,11 +43,18 @@ A client of herdr's client endpoint protocol (generation 1). No UI dependency.
 - `input.go`: input events sent to a pane: keys, text, paste and mouse.
 - `surface.go`: applies incremental patches to the local surface. A patch for another revision returns `ErrStalePatch`, on which `main` drops the connection and reconnects to get a whole surface.
 
+### `src/herdr/server`
+
+Starts and stops the herdr server. No UI dependency.
+
+- `server.go`: the API socket beside the client socket (`herdr.sock` next to `herdr-client.sock`), whose JSON protocol takes one request per line; `Stop` sends `server.stop` there, as the client endpoint doesn't offer it. `NotRunning` tells a missing or refusing socket from other dial errors.
+- `start_unix.go`: `Start` runs `herdr server` through the user's login shell (`$SHELL -l -c`), in its own session so it outlives the app, so that it finds herdr and its panes get the user's environment rather than the Finder's. `start_other.go` stubs it elsewhere.
+
 ### `src/term`
 
 Paints the terminals and handles their input. It never parses program output; it paints the cells the server already laid out.
 
-- `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`.
+- `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `SetFont` changes the font at run time; the new cell size reaches the server on the next layout. `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`.
 - `paint.go` / `color.go`: paint cells, search highlights and the selection. Colors use a 256-color palette (the theme's 16 plus xterm's color cube and grays) and cell styles such as bold, italic and reverse.
 - `layout.go`: computes each pane's card, header and content boxes. herdr leaves a border row above and below split panes, which the header takes.
 - `keys.go`: maps `ui.Key` to endpoint keys. Keys that type text go as text input; Cmd chords are kept for the app.
@@ -52,13 +62,15 @@ Paints the terminals and handles their input. It never parses program output; it
 - `search.go`: per-pane search (Cmd+F), performed by the server. Responses to earlier searches are dropped, and a search reruns when the pane's content changes.
 - `rearrange.go`: dragging a pane by its title. Dropped within 25% of a target pane's edge, it goes beside the target; dropped in the middle, the two swap places.
 
-### `src/icons/agents`
+### `src/icons`
 
-Agent marks as SVGs (currently Claude Code and Codex only), named by the agent kind herdr reports and embedded at build time. Agents without a mark get a generic icon.
+- `agents/`: agent marks as SVGs (currently Claude Code and Codex only), named by the agent kind herdr reports and embedded at build time. Agents without a mark get a generic icon.
+- `app.png`: the app icon for use inside the app, embedded at build time: the Dock icon's tile at 256px, without its margin and drop shadow, which would show as gray corners in the UI. `scripts/make-icon.sh` renders it together with `resources/icon.png`.
+- `appearance.svg`: the Appearance page's icon in the settings sidebar, a painter's palette on a tile shaped and colored like the app icon.
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `src/icons/app.png` from the artwork in `design/`.
 
 ## Notes
 

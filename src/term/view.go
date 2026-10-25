@@ -69,14 +69,22 @@ type glyphKey struct {
 const maxGlyphs = 4096
 
 func New(font ui.Font) *View {
-	v := &View{font: font, glyphs: map[glyphKey][]ui.Glyph{}, searches: map[string]*search{}, scrolls: map[string]*scrolling{},
+	v := &View{glyphs: map[glyphKey][]ui.Glyph{}, searches: map[string]*search{}, scrolls: map[string]*scrolling{},
 		titles: map[string]*ui.Handle{}, titleBoxes: map[string]ui.Rect{},
 		light: newPalette(terminal.LightTheme(), false), dark: newPalette(terminal.DarkTheme(), true)}
+	v.SetFont(font)
+	return v
+}
+
+// SetFont paints the terminals in font. Its cells may be another size,
+// which the view asks the server for as it lays out again.
+func (v *View) SetFont(font ui.Font) {
 	m := font.Metrics()
+	v.font = font
 	v.cellW = ui.Shape("M", font)[0].Advance
 	v.cellH = float32(math.Ceil(float64(m.Ascent + m.Descent + m.LineGap)))
 	v.baseline = float32(math.Round(float64(m.Ascent + m.LineGap/2)))
-	return v
+	clear(v.glyphs)
 }
 
 // SetThemes colors the terminals in light, or in dark as the app's theme
