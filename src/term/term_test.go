@@ -20,7 +20,10 @@ func TestKeyEvent(t *testing.T) {
 		{"Enter", ui.KeyEnter, 0, endpoint.Key{Code: endpoint.KeyEnter}, true},
 		{"Shift+Tab", ui.KeyTab, ui.Shift, endpoint.Key{Code: endpoint.KeyBackTab, Mods: endpoint.ModShift}, true},
 		{"Ctrl+C", ui.KeyC, ui.Ctrl, endpoint.Key{Code: endpoint.KeyChar, Char: 'c', Mods: endpoint.ModCtrl}, true},
-		{"Alt+Left", ui.KeyLeft, ui.Alt, endpoint.Key{Code: endpoint.KeyLeft, Mods: endpoint.ModAlt}, true},
+		// Option+Left/Right move by word as Esc b / Esc f; other chords keep the arrow.
+		{"Alt+Left", ui.KeyLeft, ui.Alt, endpoint.Key{Code: endpoint.KeyChar, Char: 'b', Mods: endpoint.ModAlt}, true},
+		{"Alt+Right", ui.KeyRight, ui.Alt, endpoint.Key{Code: endpoint.KeyChar, Char: 'f', Mods: endpoint.ModAlt}, true},
+		{"Shift+Alt+Left", ui.KeyLeft, ui.Shift | ui.Alt, endpoint.Key{Code: endpoint.KeyLeft, Mods: endpoint.ModShift | endpoint.ModAlt}, true},
 		{"F5", ui.KeyF5, 0, endpoint.Key{Code: endpoint.KeyF, F: 5}, true},
 		// Text keys type text, which comes as an InputText.
 		{"a", ui.KeyA, 0, endpoint.Key{}, false},

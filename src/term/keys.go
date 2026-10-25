@@ -65,6 +65,16 @@ func keyEvent(k ui.Key, m ui.Modifiers) (endpoint.Key, bool) {
 	if m&ui.Super != 0 {
 		return endpoint.Key{}, false
 	}
+	// Option+Left/Right move by word, sent as Esc b / Esc f as Ghostty does,
+	// since shells bind those and not the arrows' Alt sequences.
+	if m == ui.Alt {
+		switch k {
+		case ui.KeyLeft:
+			return endpoint.Key{Code: endpoint.KeyChar, Char: 'b', Mods: endpoint.ModAlt}, true
+		case ui.KeyRight:
+			return endpoint.Key{Code: endpoint.KeyChar, Char: 'f', Mods: endpoint.ModAlt}, true
+		}
+	}
 	mods := modifiers(m)
 	if code, ok := specialKeys[k]; ok {
 		if code == endpoint.KeyTab && m&ui.Shift != 0 {
