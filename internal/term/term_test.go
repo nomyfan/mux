@@ -175,3 +175,48 @@ func TestCursorBlink(t *testing.T) {
 		}
 	}
 }
+
+// recorder is an endpoint keeping the input the view sends.
+type recorder struct {
+	discard
+	input []endpoint.InputEvent
+}
+
+func (r *recorder) Input(_ string, events ...endpoint.InputEvent) error {
+	r.input = append(r.input, events...)
+	return nil
+}
+
+// A trackpad scroll of several rows goes to the scrollback as one event of
+// that many rows, and to a program reading the wheel, which the server
+// sends one report or key per event, as that many one-row events.
+func TestWheel(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mouse, alt    bool
+		events, lines int
+	}{
+		{"scrollback", false, false, 1, 3},
+		{"mouse reporting", true, false, 3, 1},
+		{"alternate screen", false, true, 3, 1},
+	} {
+		pane := endpoint.SurfacePane{ID: "p1", Rect: endpoint.Rect{Width: 20, Height: 10}, Inner: endpoint.Rect{Width: 20, Height: 10},
+			MouseReporting: tc.mouse, AltScreen: tc.alt}
+		s := &endpoint.Surface{Frame: endpoint.Frame{Width: 20, Height: 10, Cells: make([]endpoint.Cell, 20*10)}, Panes: []endpoint.SurfacePane{pane}}
+		v := New(ui.Font{Size: 14})
+		ep := &recorder{}
+		var requests []map[string]any
+		tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, ep, hooks(&requests)).Fill() }, 600, 300)
+		tt.Frame()
+		r := v.cellRect(ui.Rect{}, 5, 5)
+		tt.Scroll(r.X, r.Y, 0, 3.5*v.cellH)
+		if len(ep.input) != tc.events {
+			t.Fatalf("%s: sent %d events, want %d", tc.name, len(ep.input), tc.events)
+		}
+		for _, ev := range ep.input {
+			if m, ok := ev.(endpoint.Mouse); !ok || int(m.Lines) != tc.lines {
+				t.Errorf("%s: sent %+v, want a scroll of %d rows", tc.name, ev, tc.lines)
+			}
+		}
+	}
+}

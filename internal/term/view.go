@@ -496,7 +496,10 @@ func (v *View) copy() bool {
 }
 
 // wheel scrolls the pane under the pointer by whole rows: its scrollback,
-// or its program when the program takes the mouse.
+// or its program when the program takes the mouse or the alternate screen
+// (as less does, which reads the wheel as arrow keys). The server sends such
+// a program one report or key per event whatever its rows, so the rows go
+// as that many events, as a terminal sends one per wheel step.
 func (v *View) wheel(ev ui.InputEvent) bool {
 	b, col, row, ok := v.at(ev.X, ev.Y)
 	if v.ep == nil || !ok {
@@ -512,6 +515,16 @@ func (v *View) wheel(ev ui.InputEvent) bool {
 	if rows < 0 {
 		kind, rows = endpoint.ScrollUp, -rows
 	}
-	v.ep.Input(b.pane.ID, endpoint.Mouse{Kind: kind, Column: uint16(col), Row: uint16(row), Lines: uint16(rows)})
+	m := endpoint.Mouse{Kind: kind, Column: uint16(col), Row: uint16(row), Lines: uint16(rows)}
+	if !b.pane.MouseReporting && !b.pane.AltScreen {
+		v.ep.Input(b.pane.ID, m)
+		return true
+	}
+	m.Lines = 1
+	events := make([]endpoint.InputEvent, rows)
+	for i := range events {
+		events[i] = m
+	}
+	v.ep.Input(b.pane.ID, events...)
 	return true
 }
