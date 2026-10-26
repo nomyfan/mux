@@ -155,9 +155,14 @@ func (a *app) settingsDialog(c *ui.Context) {
 		if backdrop.Clicked() {
 			a.settingsOpen = true
 		}
-		// Modal's look, without its padding.
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.4))
-		panel.Row().AlignItems(ui.Stretch).Width(min(720, w-t.Space(10))).Height(min(480, h-t.Space(10))).
+		// Modal's look, without its padding, with a border. On a dark
+		// ground the shadow hardly shows, so the backdrop darkens more.
+		dim := float32(0.4)
+		if t.Dark {
+			dim = 0.6
+		}
+		backdrop.Background(ui.RGBA(0, 0, 0, dim))
+		panel.Row().Border(1, t.Border).AlignItems(ui.Stretch).Width(min(720, w-t.Space(10))).Height(min(480, h-t.Space(10))).
 			Radius(t.Space(2.5)).Background(t.Background).Clip().Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.3))
 		// The sidebar pads its items itself; the first lines up with the
 		// page's title.
