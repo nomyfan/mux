@@ -170,7 +170,9 @@ func (v *View) paintRow(p *ui.Painter, x0, y float32, row []endpoint.Cell, marks
 		if covered {
 			w *= 2
 		}
-		p.Glyphs(v.shape(c.Symbol, c.Modifier), cx, y+v.baseline, fg)
+		if !paintBlock(p, ui.Rect{X: cx, Y: y, W: w, H: v.cellH}, c.Symbol, fg) {
+			p.Glyphs(v.shape(c.Symbol, c.Modifier), cx, y+v.baseline, fg)
+		}
 		if c.Modifier&underline != 0 {
 			p.Fill(ui.Rect{X: cx, Y: y + v.cellH - 2, W: w, H: 1}, fg, 0)
 		}
@@ -239,7 +241,9 @@ func (v *View) paintCursor(p *ui.Painter, r ui.Rect) {
 			if text == (ui.Color{}) {
 				text = th.Background
 			}
-			p.Glyphs(v.shape(c.Symbol, c.Modifier), box.X, box.Y+v.baseline, text)
+			if !paintBlock(p, box, c.Symbol, text) {
+				p.Glyphs(v.shape(c.Symbol, c.Modifier), box.X, box.Y+v.baseline, text)
+			}
 		}
 	}
 }
