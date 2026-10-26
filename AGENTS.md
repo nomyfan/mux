@@ -11,6 +11,7 @@ go tool mygo vet .                        # go vet plus checks for stored UI bui
 CGO_ENABLED=0 go test ./...               # all tests
 go test ./internal/term -run TestSearch   # a single test
 scripts/make-icon.sh                      # render resources/icon.png and cmd/mux/icons/app.png from the artwork in design/ (needs ImageMagick)
+scripts/make-screenshot.sh light.png dark.png  # split two window screenshots along the diagonal into docs/screenshot.png (needs ImageMagick)
 ```
 
 `mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./cmd/mux`) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel.
@@ -71,7 +72,7 @@ Paints the terminals and handles their input. It never parses program output; it
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`, and `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window.
 
 ## Notes
 
