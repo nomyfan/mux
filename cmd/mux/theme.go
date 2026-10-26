@@ -15,8 +15,8 @@ import (
 var lightTheme, darkTheme = func() (light, dark *ui.Theme) {
 	light = ui.LightTheme()
 	light.Background = ui.Hex("#faf8f5")
-	light.Surface = ui.Hex("#f2efec")
-	light.SurfaceHover = ui.Hex("#ebe5de")
+	light.Surface = ui.Hex("#efeae4")
+	light.SurfaceHover = ui.Hex("#e7e0d8")
 	light.SurfacePressed = ui.Hex("#e0d6cc")
 	light.Border = ui.Hex("#cbbdae")
 	light.Text = ui.Hex("#45413d")
