@@ -251,14 +251,55 @@ func (a *app) serverSettings(c *ui.Context) {
 	})
 }
 
-// appearanceSettings chooses the app's appearance.
+var (
+	//go:embed icons/appearance-auto.svg
+	appearanceAutoSVG []byte
+	//go:embed icons/appearance-light.svg
+	appearanceLightSVG []byte
+	//go:embed icons/appearance-dark.svg
+	appearanceDarkSVG []byte
+)
+
+// appearancePictures are the appearance choices' pictures, in the order of
+// appearances: the window drawn small in each, as System Settings draws
+// macOS's, Auto's split along the diagonal as the README's screenshot is.
+// scripts/make-appearance-previews.sh draws them.
+var appearancePictures = [...]*ui.SVG{
+	ui.MustParseSVG(appearanceAutoSVG), ui.MustParseSVG(appearanceLightSVG), ui.MustParseSVG(appearanceDarkSVG),
+}
+
+// appearanceSettings chooses the app's appearance among pictures of the
+// window in each.
 func (a *app) appearanceSettings(c *ui.Context) {
+	t := c.Theme()
 	settingsCard(c, func() {
-		settingsRow(c, "Theme", "Auto follows the system’s appearance.", func() {
-			ui.Segmented(c.Key("appearance"), &a.appearance, "Auto", "Light", "Dark").Label("Theme").
-				OnChange(func() { a.setAppearance(appearances[a.appearance]) })
-		})
+		settingsRow(c, "Theme", "Auto follows the system’s appearance.", func() {})
+		ui.RadioGroup(c.Key("appearance"), func() {
+			for i, label := range []string{"Auto", "Light", "Dark"} {
+				a.appearanceChoice(c, i, label)
+			}
+		}).Row().Gap(t.Space(5)).Padding(t.Space(1), 0, t.Space(4), 0).Label("Theme")
 	})
+}
+
+// appearanceChoice is the choice of appearances[i], named label: its
+// picture, ringed in the accent while chosen, over its name.
+func (a *app) appearanceChoice(c *ui.Context, i int, label string) {
+	t := c.Theme()
+	chosen := a.appearance == i
+	ring, name := ui.Color{}, t.TextMuted
+	if chosen {
+		ring, name = t.Accent, t.Text
+	}
+	ui.RadioBase(c.Key(label), &a.appearance, i).Column().AlignItems(ui.Center).Gap(t.Space(1.5)).Label(label).
+		OnChange(func() { a.setAppearance(appearances[a.appearance]) }).
+		Children(func() {
+			// The ring stands off the picture, whose corners are 6 round.
+			ui.Box(c).Padding(2).Radius(10).Border(2, ring).Children(func() {
+				ui.Image(c, appearancePictures[i]).Size(120, 76)
+			})
+			ui.Text(c, label).FontSize(t.FontSize - 1).TextColor(name)
+		})
 }
 
 // terminalSettings chooses the terminals' fonts and how they are drawn,
