@@ -470,8 +470,9 @@ func (v *View) selection() (*selection, endpoint.SurfacePane, bool) {
 	return nil, endpoint.SurfacePane{}, false
 }
 
-// copy copies the selected text, which the server reads where the screen
-// does not show all of it, and reports whether there is any.
+// copy copies the selected text and reports whether there is any. The
+// server reads it, even where the screen shows all of it, as only the
+// server knows which rows a long line wraps onto: those it joins.
 func (v *View) copy() bool {
 	s, p, ok := v.selection()
 	if !ok {
@@ -480,10 +481,6 @@ func (v *View) copy() bool {
 	from, to, ok := s.span()
 	if !ok {
 		return false
-	}
-	if text, ok := screenText(&v.surface.Frame, p, from, to); ok {
-		v.services.WriteClipboard(text)
-		return true
 	}
 	params := map[string]any{"pane_id": p.ID, "anchor": from, "cursor": to}
 	v.hooks.Request("pane.selection.read", params, func(result json.RawMessage, err error) {

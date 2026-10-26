@@ -77,15 +77,22 @@ func hooks(requests *[]map[string]any) Hooks {
 	}
 }
 
-// Dragging over a pane's cells selects them, which Copy copies; a click
-// ends the selection.
+// Dragging over a pane's cells selects them, which Copy copies as the
+// server reads them, a line wrapping onto the next row joined; a click ends
+// the selection.
 func TestSelectCopy(t *testing.T) {
 	s := &endpoint.Surface{Frame: *frame(30, "", "hello world", "second line"), Panes: []endpoint.SurfacePane{
 		{ID: "p1", Focused: true, Rect: endpoint.Rect{Width: 30, Height: 3}, Inner: endpoint.Rect{Width: 30, Height: 3}},
 	}}
 	v := New(ui.Font{Size: 14})
 	var requests []map[string]any
-	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, nil, hooks(&requests)).Fill() }, 600, 300)
+	h := hooks(&requests)
+	request := h.Request
+	h.Request = func(method string, params any, done func(json.RawMessage, error)) {
+		request(method, params, done)
+		done(json.RawMessage(`{"pane_id":"p1","text":"worldsecond"}`), nil)
+	}
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, nil, h).Fill() }, 600, 300)
 	tt.Frame()
 	at := func(x, y int) (float32, float32) {
 		r := v.cellRect(ui.Rect{}, x, y)
@@ -95,7 +102,15 @@ func TestSelectCopy(t *testing.T) {
 	tt.Move(at(5, 2))
 	tt.Release(at(5, 2))
 	tt.Command("copy")
-	if got, want := tt.Clipboard(), "world\nsecond"; got != want {
+	if len(requests) != 1 || requests[0]["method"] != "pane.selection.read" {
+		t.Fatalf("copying asked %v", requests)
+	}
+	for k, want := range map[string]map[string]any{"anchor": {"row": 1.0, "col": 6.0}, "cursor": {"row": 2.0, "col": 5.0}} {
+		if got := requests[0][k].(map[string]any); got["row"] != want["row"] || got["col"] != want["col"] {
+			t.Errorf("%s %v, want %v", k, got, want)
+		}
+	}
+	if got, want := tt.Clipboard(), "worldsecond"; got != want {
 		t.Errorf("copied %q, want %q", got, want)
 	}
 	tt.ClickAt(at(3, 1))
@@ -105,7 +120,7 @@ func TestSelectCopy(t *testing.T) {
 }
 
 // A selection stays with its text as the pane scrolls, and the server
-// reads it once the screen no longer shows it all.
+// reads it from the pane's history once the screen no longer shows it all.
 func TestSelectionScrolls(t *testing.T) {
 	pane := endpoint.SurfacePane{ID: "p1", Focused: true, Rect: endpoint.Rect{Width: 20, Height: 3}, Inner: endpoint.Rect{Width: 20, Height: 3},
 		Scroll: &endpoint.Scroll{Offset: 0, Max: 10, Rows: 3}}
