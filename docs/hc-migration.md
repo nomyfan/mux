@@ -8,6 +8,13 @@
 - herdr-app `b41b5cb`（2026-10-29）
 - MyGo v0.6.3（`go.mod` 里锁定的版本）
 
+## 交接（2026-10-29）
+
+- 代码在分支 `hc-migration`，已推送。Mux 已经完全换到 herdr-core：连接、终端显示、输入、分屏、布局保存、agent 状态、启停 core 都能用。
+- 在 Linux 上用真实 herdr-core 0.1.13 验证过（单元测试、连真实 core 的端到端测试、Xvfb 里跑真实 app 截图），**还没在 macOS 上跑过**，Mac 上要确认的事列在下面"没做的、需要在 Mac 上确认的"。
+- Mac 上开始：先装 hc（`curl -fsSL https://releases.herdr.dev/core/install.sh | sh`），再 `go tool mygo dev`。想不碰自己正在用的 core，按下面"手工跑的方法"设一组隔离的环境变量。
+- 跑测试：`CGO_ENABLED=0 go test ./...`；加 `MUX_HC_TEST=1` 会另外启动一个临时的 core 跑端到端测试，结束时停掉。
+
 ## 背景
 
 herdr 拆成了两个仓库：
