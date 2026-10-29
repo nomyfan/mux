@@ -28,7 +28,7 @@ type app struct {
 	// post runs a function on the main thread: the window's Update.
 	post func(func())
 	// bin is the herdr-core command, "" until found; notInstalled while
-	// none is. env is the environment it runs in.
+	// none is. env is the environment it runs in, once read.
 	bin          string
 	notInstalled bool
 	env          []string
@@ -712,7 +712,9 @@ func (a *app) pane(c *ui.Context, titleLeft float32) {
 				left = max(left, titleLeft)
 			}
 			// The window's buttons on the right (Linux, Windows).
-			right += bar.Right
+			if a.term.AtRight(box) {
+				right += bar.Right
+			}
 		}
 		a.paneHeader(c, tab, terminal, left, right, focused, focused || hovered)
 	}
@@ -962,7 +964,7 @@ func (a *app) splitFocused(d layout.Direction) {
 }
 
 func main() {
-	a := &app{sidebarWidth: 240, settings: loadSettings(), env: clientEnv()}
+	a := &app{sidebarWidth: 240, settings: loadSettings()}
 	a.term = term.New(a.settings.terminalFont(), lightTerminal, darkTerminal)
 	// Only macOS: elsewhere the menu would add a bar to the window, and the
 	// view takes the File menu's keys.

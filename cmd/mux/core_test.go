@@ -114,4 +114,11 @@ func TestWithCore(t *testing.T) {
 	tt.Type("exit")
 	tt.Key(0, ui.KeyEnter)
 	pump("empty layout", func() bool { return len(a.lay.Workspaces) == 0 && tt.HasText("No tabs") })
+	// And its record goes, as the core keeps finished terminals until
+	// removed.
+	pump("records removed", func() bool {
+		_, ok1 := a.terms.Find(first)
+		_, ok2 := a.terms.Find(second)
+		return !ok1 && !ok2
+	})
 }

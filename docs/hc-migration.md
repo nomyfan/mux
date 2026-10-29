@@ -180,6 +180,7 @@ hc server stop                 # 用完停掉
 - **隐藏 tab 的终端一直保持 attach**：切回来是瞬间的，但每个 pane 都占一条流和一份 scrollback。pane 多了以后可以考虑 detach 不可见的。
 - **拖动分割线时程序每帧都收到 resize**：原来只在跨过一个格子时请求服务端。插件会按格子数变化才调 `ResizePixels`，问题不大，但拖得快时 shell 会重绘多次。
 - **设置里的字体预览**还是用 `ui.Font` 自己画，不是插件的终端；可以换成一个只 `Feed` 预览文本的插件终端，做到真正"和终端画法一致"。
+- **新终端的第一行提示符可能错乱**：`terminal.run` 不接受尺寸，新终端以 core 默认的 200×120 启动，shell 按 200 列打出提示符；Mux 随后按 pane 的实际尺寸 attach，core 把屏幕重排到新宽度，bash 收到 SIGWINCH 又重画一次提示符，两者叠在一起，偶尔出现 `roovm:/home/...`（`root@vm` 被盖掉一段）这样的行。只影响第一行，之后正常。可以向 herdr-core 提议 `terminal.run` 接受 `cols` / `rows`，或者看 herdr-app 怎么处理。
 - **herdr 1 的数据不迁移**：原来 herdr 1 里的 workspace 不会带过来，Mux 第一次连 hc 时会新建一个 workspace。
 - **core 版本检查**只看 protocol generation 和用到的方法是否都有，没有最低版本号。
 

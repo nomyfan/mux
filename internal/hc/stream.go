@@ -66,12 +66,13 @@ func (s *Stream) end(err error) {
 // as its program ended (see Reason), ErrLost once the connection is gone.
 func (s *Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for len(s.frames) == 0 && s.err == nil {
 		s.more.Wait()
 	}
 	if len(s.frames) == 0 {
-		return 0, s.err
+		err := s.err
+		s.mu.Unlock()
+		return 0, err
 	}
 	n := copy(p, s.frames[0])
 	if n < len(s.frames[0]) {
@@ -79,7 +80,11 @@ func (s *Stream) Read(p []byte) (int, error) {
 	} else {
 		s.frames = s.frames[1:]
 	}
-	if s.err == nil {
+	open := s.err == nil
+	s.mu.Unlock()
+	// Credited without the lock, which the connection's reader takes to
+	// hand frames over: a core slow to read must not stop it.
+	if open {
 		s.c.send(s.channel, kindCredit, binary.LittleEndian.AppendUint32(nil, uint32(n)))
 	}
 	return n, nil

@@ -114,6 +114,11 @@ func (v *View) Focus() { v.refocus = true }
 // program would draw itself again.
 func (v *View) Settling(dw float32) { v.grow = dw }
 
+// AtRight reports whether a pane's header, in the box the view gave it,
+// reaches the view's right edge, under the window's buttons there (Linux,
+// Windows).
+func (v *View) AtRight(box ui.Rect) bool { return box.X+box.W >= v.width-1 }
+
 // HeaderCenter is how far below the view's top the headers along it center
 // their contents.
 func (v *View) HeaderCenter() float32 { return HeaderHeight / 2 }

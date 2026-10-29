@@ -57,25 +57,32 @@ func (g *gate) wait() {
 // one fails or ends: `hc connect` starts the core if none runs, unless
 // the user stopped it.
 func (a *app) connect() {
+	// Reading the login shell's environment takes a while: not before the
+	// window opens.
+	env := a.env
+	if env == nil {
+		env = clientEnv()
+		a.update(func() { a.env = env })
+	}
 	for {
 		a.gate.wait()
-		err := a.session()
+		err := a.session(env)
 		msg := err.Error()
 		a.update(func() { a.disconnected(msg) })
 		time.Sleep(time.Second)
 	}
 }
 
-// session connects to the core and reads its events until the connection
-// ends, returning why.
-func (a *app) session() error {
+// session connects to the core, running its client in env, and reads its
+// events until the connection ends, returning why.
+func (a *app) session(env []string) error {
 	bin, err := hc.Find()
 	if err != nil {
 		a.update(func() { a.bin, a.notInstalled = "", true })
 		time.Sleep(2 * time.Second)
 		return err
 	}
-	conn, err := hc.Connect(bin, a.env)
+	conn, err := hc.Connect(bin, env)
 	if err != nil {
 		return err
 	}
@@ -189,7 +196,10 @@ func (a *app) receive() {
 		case "restarted":
 			// A kept terminal's new shell: its pane attaches again.
 			a.term.Drop(ev.Terminal)
-		case "finished", "removed":
+		case "finished":
+			a.forget(ev.Terminal)
+			pruned = true
+		case "removed":
 			pruned = true
 		}
 		if ev.Method == "missed" {
@@ -199,6 +209,15 @@ func (a *app) receive() {
 	if pruned && a.lay.Prune(a.live) {
 		a.term.Retain(a.lay.Terminals())
 		a.save()
+	}
+}
+
+// forget removes the record of a terminal of the app's that finished, as
+// its shell exited: the core keeps finished terminals until removed.
+func (a *app) forget(address string) {
+	t, ok := a.terms.Find(address)
+	if conn := a.conn; ok && conn != nil && t.Labels["mux"] != "" {
+		go conn.Remove(address)
 	}
 }
 
