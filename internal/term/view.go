@@ -31,6 +31,7 @@ type View struct {
 	dividers    []layout.Divider
 	width       float32
 	height      float32
+	waits       int     // frames asked for while the view has no size
 	grow        float32 // how much wider it is to settle, as Settling says
 	grew        float32 // grow as of the last layout
 	// focused is the pane whose terminal had the keyboard as of the last
@@ -123,6 +124,10 @@ func (v *View) Drop(terminal string) {
 	if p := v.panes[terminal]; p != nil {
 		p.term.Close()
 		delete(v.panes, terminal)
+		// A pane that had the keyboard takes it again as it shows.
+		if terminal == v.focused {
+			v.focused, v.refocus = "", true
+		}
 	}
 }
 
@@ -192,6 +197,19 @@ func (v *View) Build(c *ui.Context, tab *layout.Tab, att Attacher, hooks Hooks) 
 	}
 	e := ui.Box(c).Clip().Bind(&v.handle).Label("Panes")
 	b := v.handle.Bounds(c)
+	// The panes lay out in the box of the frame before, the last one
+	// committed: as it changes, or first shows, they lay out again in a
+	// frame of their own, which nothing else may ask for.
+	switch {
+	case b.W != v.width || b.H != v.height:
+		c.Invalidate()
+	case b.W == 0 && v.waits < 3:
+		v.waits++
+		c.Invalidate()
+	}
+	if b.W > 0 {
+		v.waits = 0
+	}
 	v.width, v.height = b.W, b.H
 	// The bounds are the last layout's, which the growth then goes with.
 	v.layOut(b.W+v.grew, b.H)

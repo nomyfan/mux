@@ -557,3 +557,13 @@ func TestGitBranch(t *testing.T) {
 		}
 	}
 }
+
+// A terminal's program gets UTF-8's locale where the app has none.
+func TestTerminalEnv(t *testing.T) {
+	if got := terminalEnv([]string{"PATH=/bin"})["LANG"]; got != "en_US.UTF-8" {
+		t.Errorf("without a locale, LANG %q", got)
+	}
+	if got, ok := terminalEnv([]string{"LC_CTYPE=de_DE.UTF-8"})["LANG"]; ok {
+		t.Errorf("with a locale, LANG %q", got)
+	}
+}

@@ -233,3 +233,42 @@ func TestDivider(t *testing.T) {
 		t.Error("the drag's end saved nothing")
 	}
 }
+
+// Panes laid out as the tab first shows build again at their size, without
+// anything else asking for a frame.
+func TestLaysOutUnasked(t *testing.T) {
+	core := &fakeCore{}
+	v, changed := newView(), 0
+	var tab *layout.Tab
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+			if tab != nil {
+				v.Build(c, tab, core, testHooks(v, &changed)).Grow(1)
+			}
+		})
+	}, 800, 400)
+	tab = twoPanes()
+	tt.Frame()
+	for range 10 {
+		if !tt.FramePending() {
+			break
+		}
+		tt.Frame()
+	}
+	if len(v.boxes) != 2 || !tt.HasText("title t1") {
+		t.Errorf("laid out %d panes, showing %q", len(v.boxes), tt.Texts())
+	}
+}
+
+// A pane whose terminal attaches again, as its program restarted, takes
+// the keyboard again if it had it.
+func TestDropKeepsFocus(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "focus", func() bool { return v.Focused() == "t1" })
+	v.Drop("t1")
+	waitFor(t, tt, "focus again", func() bool { return v.Focused() == "t1" && tt.Focused("Terminal") })
+	tt.Type("x")
+	waitFor(t, tt, "input", func() bool { return core.stream("t1").Typed() == "x" })
+}

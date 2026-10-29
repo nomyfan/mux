@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Mux is a native GUI client for herdr, a terminal multiplexer for coding agents, written in Go with [MyGo](https://github.com/egoist/mygo)'s native `ui` package. It connects to herdr's client endpoint and replaces herdr's TUI with a window: a sidebar of workspaces, tabs and agent states on the left, and the chosen tab's terminal panes on the right. The herdr server still runs the terminals; Mux only paints them and forwards input, and never parses program output.
+Mux is a native GUI client for [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`), a terminal runtime for coding agents, written in Go with [MyGo](https://github.com/egoist/mygo)'s native `ui` package. It talks to the core through `hc connect` and shows its terminals in a window: a sidebar of workspaces, tabs and agent states on the left, and the chosen tab's panes on the right. The core runs the programs and relays their raw output; each pane feeds it to a terminal emulator of MyGo's terminal plugin (libghostty-vt). Workspaces, tabs and splits are Mux's own: the core has none, and keeps Mux's layout as a document. `docs/hc-migration.md` records why Mux moved from herdr 1 to herdr-core, what was found on the way, and what is left.
 
 ## Commands
 
@@ -9,17 +9,18 @@ go tool mygo dev                          # run a development build with live re
 go tool mygo build                        # package the app (.app and .dmg on macOS, into build/)
 go tool mygo vet .                        # go vet plus checks for stored UI build values
 CGO_ENABLED=0 go test ./...               # all tests
-go test ./internal/term -run TestSearch   # a single test
+MUX_HC_TEST=1 CGO_ENABLED=0 go test ./... # also the tests against a real herdr-core, in a session of their own
+go test ./internal/layout -run TestBoxes  # a single test
 scripts/make-icon.sh                      # render resources/icon.png and cmd/mux/icons/app.png from the artwork in design/ (needs ImageMagick)
 scripts/make-screenshot.sh light.png dark.png  # split two window screenshots along the diagonal into docs/screenshot.png (needs ImageMagick)
 scripts/make-appearance-previews.sh       # write the settings' appearance pictures, cmd/mux/icons/appearance-{light,dark,auto}.svg
 ```
 
-`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./cmd/mux`) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel.
+`mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./cmd/mux`, macOS 13 or later for libghostty-vt) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel. Running the app needs herdr-core installed (`curl -fsSL https://releases.herdr.dev/core/install.sh | sh`). The terminal plugin loads libghostty-vt at run time, without cgo: `mygo build` puts it in the app, and `go run` / `go test` download it once into the user's cache.
 
 ## Modules
 
-Dependencies run `main` → `term` → `herdr/endpoint`; `herdr/server` and the icons are used only by `main`.
+Dependencies run `main` → `term` → `hc` and `layout`; `term` and `main` use MyGo's terminal plugin; `hc` and `layout` have no UI dependency.
 
 ### `cmd/mux/` (package `main`)
 
@@ -27,57 +28,55 @@ The app itself: top-level UI and app state.
 
 - `main.go`:
   - Creates the window. On macOS the title bar is hidden and the traffic lights sit over the sidebar, centered on the pane headers.
-  - The sidebar groups tabs by workspace and has a list of agents with breathing status dots. Workspaces, tabs and panes can be renamed in place, collapsed and created; closing asks for confirmation. Cmd+T makes a tab in the focused workspace, Cmd+N a workspace, Cmd+W closes the focused tab (confirmed) and Cmd+Shift+W the focused pane; on macOS these four sit in the app's own File menu, as the default one's Close Window would take Cmd+W. Cmd+Shift+[ / ] go around the focused workspace's tabs, Cmd+1–8 to one of them and Cmd+9 to its last; Cmd+Shift+Enter zooms the focused pane. New tabs, workspaces and split panes pass no `cwd`, only where they come from, so herdr's `[terminal] new_cwd` decides where they start (by default, the source pane's directory).
-  - Pane headers carry the split, zoom and close buttons.
-  - A background goroutine connects to the endpoint and reconnects every second after a drop. Messages it reads go into an inbox and reach the main thread through `Window.Update`, a batch at a time.
-  - Request queue: the endpoint handles one request at a time (otherwise it answers `endpoint_busy`), so requests wait here and the next is sent once the previous one is answered.
-- `settings.go`: the settings dialog (Cmd+,): pages listed on the left (Server, Appearance, Terminal), the chosen one on the right, scrolling under its title. Appearance is auto, light or dark, chosen among pictures of the window in each (`icons/appearance-*.svg`) and applied through `mygo.Theme.SetSource`. Terminal shows a preview of the terminals' text, drawn as they draw it, above their fonts: a family chosen among the system's monospaced ones (default: the system's own, `monospace`) and an optional fallback family, among all of them, for the glyphs the first lacks such as Nerd Font icons (default: none), their size (8–32, default 14) (`ui.FontFamilies`, listed in the background at startup), and, on macOS, font smoothing (default: off, thinner, as Ghostty draws by default; on is `ui.Font`'s smoothing as AppKit draws text, off its `Antialiased`). They apply at once through `term.View.SetFont`. Settings are saved as `settings.json` in the app's user data directory and applied before the window opens.
-- `server.go`: the herdr server's state in the UI. When no server listens on the socket, the sidebar is emptied and the pane area offers Start Server; the settings' Server page shows the status and starts or stops it (stopping asks for confirmation). The server is shown with the in-app icon `cmd/mux/icons/app.png`.
+  - The sidebar groups tabs by workspace and has a list of agents with breathing status dots. Workspaces, tabs and panes can be renamed in place, collapsed and created; closing asks for confirmation. A workspace without a name is called after the folder of its first pane, a tab without one after its focused pane. Cmd+T makes a tab in the shown workspace, Cmd+N a workspace, Cmd+W closes the shown tab (confirmed) and Cmd+Shift+W the focused pane; on macOS these four sit in the app's own File menu, as the default one's Close Window would take Cmd+W. Cmd+Shift+[ / ] go around the shown workspace's tabs, Cmd+1–8 to one of them and Cmd+9 to its last; Cmd+D / Cmd+Shift+D split the focused pane right / down; Cmd+Shift+Enter zooms it. New tabs, workspaces and split panes start where the focused pane's program is (its foreground process's folder, as the core reports it).
+  - Pane headers carry the split, zoom and close buttons, and show the pane's name, its agent's state, its folder and its Git branch (read from `.git` off the main thread).
+  - Choosing an agent shows its pane; an agent without one, as one another agent started, gets a tab of its own.
+- `core.go`: the app's side of the core. A goroutine keeps the connection (`hc connect`, which starts the core if none runs) and reconnects every second after a drop, unless the user stopped the core. It subscribes to the event stream before reading the layout document, so no change is missed, and the events reach the main thread through `post` (the window's `Update`, which tests replace), a batch at a time. The layout is saved to the core's `mux` document one write at a time, by version; a conflicting write adopts the other writer's layout, and another app's write is read again. Panes whose terminals finish or go are pruned, a tab with no pane closes, a workspace with no tab too; an empty core gets a workspace. Terminals are run with `keep`, so they get fresh shells after a core or machine restart, with the label `mux=1`, no parent, `TERM=xterm-256color`, `COLORTERM=truecolor`, and `LANG=en_US.UTF-8` when the app's environment has no locale (as one opened from the Finder). Opened from the Finder (parent pid 1), the app takes the login shell's environment for `hc connect`, so the core it starts gives its programs the user's.
+- `model.go`: what things are called, from the layout and the terminals' records: agents (terminals whose programs report an OSC 7501 status) and their names and marks by the `app` they report, pane, tab and workspace names, the most urgent state of a tab's agents, and Git branches.
+- `settings.go`: the settings dialog (Cmd+,): pages listed on the left (Server, Appearance, Terminal), the chosen one on the right, scrolling under its title. Server shows the core's status and the `hc` the app runs, and stops it (confirmed) or starts it again. Appearance is auto, light or dark, chosen among pictures of the window in each (`icons/appearance-*.svg`) and applied through `mygo.Theme.SetSource`. Terminal shows a preview of the terminals' text above their fonts: a family chosen among the system's monospaced ones (default: the system's own, `monospace`) and an optional fallback family, among all of them, for the glyphs the first lacks such as Nerd Font icons (default: none), their size (8–32, default 14) (`ui.FontFamilies`, listed in the background at startup), and, on macOS, Thicken Text (the plugin's `Font.Thicken`, as Ghostty's font-thicken; default off). They apply at once through `term.View.SetFont`. Settings are saved as `settings.json` in the app's user data directory and applied before the window opens.
+- `server.go`: the core's state in the UI. Without herdr-core installed, the pane area shows the command installing it; stopped by the user, it offers Start Server. The core is shown with the in-app icon `cmd/mux/icons/app.png`.
 - `theme.go`: the Vellum colors in light and dark. Controls take its Zed colors; terminals take its Ghostty colors, with a true blue and cyan, their own bright colors and grays that show on either ground, and the cursor in the controls' accent.
 
-### `internal/herdr/endpoint`
+### `internal/hc`
 
-A client of herdr's client endpoint protocol (generation 1). No UI dependency.
+A client of herdr-core's API (protocol generation 1; the core's `schema/README.md` and `hc schema` describe it). No UI dependency.
 
-- `conn.go`: resolves the socket path (`HERDR_SOCKET_PATH`, else `HERDR_SESSION`, else the default session), performs the hello / welcome handshake, reads framed messages, and sends requests and input.
-- `bincode.go`: bincode 2 encoding and decoding: little endian, variable-length integers.
-- `wire.go`: message types mirroring herdr's `src/protocol/wire.rs`, whose field order is the wire format. The two main payloads are the Snapshot (workspaces, tabs, panes and agents, sent as JSON) and the Surface (the laid-out grid of cells).
-- `input.go`: input events sent to a pane: keys, text, paste and mouse.
-- `surface.go`: applies incremental patches to the local surface. A patch for another revision returns `ErrStalePatch`, on which `main` drops the connection and reconnects to get a whole surface.
+- `conn.go`: runs `hc connect`, says hello and switches to framed mode: frames of `[channel u32][kind u8][len u32][payload]`, JSON-RPC on channel 0, streams on their own channels. Calls run side by side, safe from any goroutine; frames of a channel that come before the reply opening it wait for it. `Hello.Check` tells a core the client can't use.
+- `stream.go`: a channel's stream: `Read` takes the bytes and credits the core for them, `Write` sends what is typed, and `Resize`, `Focus` and `Facts` (the viewer's colors and cell size, for programs that ask) send their frames. The core's CLOSE ends it with `io.EOF` and a reason; a lost connection with `ErrLost`.
+- `terminal.go`: the terminal record and the calls Mux makes: `terminal.run`, `terminal.attach`, `terminal.kill`, `terminal.rm`, `doc.get`, `doc.set`, `server.stop`.
+- `events.go`: `events.subscribe` and its notifications, and `Terminals`, which applies them to the snapshot as the schema says (missed brings a new snapshot; events not above its `seq` are dropped).
+- `find.go`: finds `herdr-core` or `hc` (one whose `--version` says `hc`) on PATH or where its installer and package managers put it, reads the login shell's environment, and drops a core terminal's variables (`HC_TERMINAL_ID`, `HERDR_*`) from the client's.
 
-### `internal/herdr/server`
+### `internal/layout`
 
-Starts and stops the herdr server. No UI dependency.
+Mux's layout, kept in the core's `mux` document. No UI dependency.
 
-- `server.go`: the API socket beside the client socket (`herdr.sock` next to `herdr-client.sock`), whose JSON protocol takes one request per line; `Stop` sends `server.stop` there, as the client endpoint doesn't offer it. `NotRunning` tells a missing or refusing socket from other dial errors.
-- `start_unix.go`: `Start` runs `herdr server` through the user's login shell (`$SHELL -l -c`), in its own session so it outlives the app, so that it finds herdr and its panes get the user's environment rather than the Finder's. `start_other.go` stubs it elsewhere.
+- `layout.go`: workspaces of tabs, the tab shown, adding and removing them, pruning panes whose terminals are gone, and repairing a document read back.
+- `tree.go`: a tab's binary tree of splits whose leaves are panes (a terminal, and a name the user gave): splitting, swapping, moving a pane beside another, laying the panes out in a box with lines between them, and finding the pane beside one toward a direction.
 
 ### `internal/term`
 
-Paints the terminals and handles their input. It never parses program output; it paints the cells the server already laid out.
+Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the program's output and encodes keys, mouse and paste as the program asked (Kitty keyboard protocol, bracketed paste and so on), selects and copies, opens links and searches.
 
-- `view.go`: `View` holds state across frames (font, glyph cache, the size last sent to the server). `SetFont` changes the font at run time; the new cell size reaches the server on the next layout. `Build` is the entry point. Input and size go out through the `Endpoint` interface; header content, focus, requests and the like go back to `main` through `Hooks`. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane, as the server finds it (`pane.focus_direction`, `pane.swap`).
-- `paint.go` / `color.go`: paint cells, search highlights, the selection and the cursor, in the shape the program sets (DECSCUSR) and blinking when that shape does. Colors use a 256-color palette (the theme's 16 plus xterm's color cube and grays) and cell styles such as bold, italic and reverse.
-- `block.go`: draws block elements (U+2580–259F) as rectangles of the cell, as Ghostty does, rather than the font's glyphs, whose antialiased edges show as seams between neighboring blocks.
-- `layout.go`: computes each pane's card, header and content boxes. herdr leaves a border row above and below split panes, which the header takes.
-- `keys.go`: maps `ui.Key` to endpoint keys. Keys that type text go as text input; Cmd chords are kept for the app.
-- `select.go`: text selection and copy. The selection stays with the text as it scrolls.
-- `search.go`: per-pane search (Cmd+F), performed by the server. Responses to earlier searches are dropped, and a search reruns when the pane's content changes.
+- `view.go`: `View` holds the panes' terminals across frames, made as a pane first shows and closed as it goes (`Retain`, `Drop`, `Reset`). `Build` lays out the tab with headers along each pane's top (`HeaderHeight`), the dividers between panes, which drag, and asks for another frame as the area's size changes, as it lays out in the last committed box. Focus follows the keyboard both ways: a click in a terminal focuses its pane in the tab, and the tab's focus, as the app moves it, takes the keyboard. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane. While a transition around it settles (`Settling`, as the sidebar slides), the panes take the width they settle at, so their programs don't redraw at every step.
+- `conn.go`: a pane terminal's `Conn`: it attaches as the plugin first tells it the view's size, so the first paint comes at that size; until then reads wait and what is typed waits too. It tells the core the size, the cell size and the colors as they change.
+- `search.go`: per-pane search (Cmd+F) with the plugin's search: Enter goes to older matches, Shift+Enter to newer.
 - `rearrange.go`: dragging a pane by its title. Dropped within 25% of a target pane's edge, it goes beside the target; dropped in the middle, the two swap places.
 
 ### `cmd/mux/icons`
 
-- `agents/`: agent marks as SVGs (currently Claude Code and Codex only), named by the agent kind herdr reports and embedded at build time. Agents without a mark get a generic icon.
+- `agents/`: agent marks as SVGs (currently Claude Code and Codex only), embedded at build time; `agentMarks` maps the `app` agents report to them. Agents without a mark get a generic icon.
 - `app.png`: the app icon for use inside the app, embedded at build time: the Dock icon's tile at 256px, without its margin and drop shadow, which would show as gray corners in the UI. `scripts/make-icon.sh` renders it together with `resources/icon.png`.
 - `appearance.svg`, `terminal.svg`: the Appearance and Terminal pages' icons in the settings sidebar, on the dark tile of `app.png`: System Settings' appearance mark (a ringed circle half light and half dark, around a smaller one the other way round) in cream as the app icon's art, and a prompt in Vellum's green.
 - `appearance-light.svg`, `appearance-dark.svg`, `appearance-auto.svg`: the Appearance page's choices, the window drawn small in Vellum's light and dark colors, Auto's split along the diagonal as the README's screenshot is. `scripts/make-appearance-previews.sh` writes them; change them there.
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot and `hc-migration.md`, the record of the move to herdr-core; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
 
 ## Notes
 
 - Keep this file current. When a change adds, removes, renames or moves a module or file listed above, shifts a module's responsibility, or changes the commands, update this file in the same change.
 - Before changing UI code, read `.agents/skills/mygo-maintenance/SKILL.md` for MyGo's lifetime, identity, threading and testing rules. UI tests use `ui.NewTester`.
-- During development the agent usually runs inside a herdr pane, with `HERDR_SOCKET_PATH` and friends set. Any temporary test that actually dials a herdr socket (calls `endpoint.Dial` / `DefaultSocketPath`) must `t.Skip` unless `HERDR_SESSION == "guiprobe"`, be run with `env -u HERDR_ENV -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID HERDR_SESSION=guiprobe ...`, and be deleted before running `go test ./...`; otherwise it acts on the user's live default session.
+- Never let a test or a probe act on the user's own core. The tests against a real herdr-core (`MUX_HC_TEST=1`) run one of their own: `HC_SESSION`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME` all point at temporary places, and they stop it as they end. Do the same for any probe by hand. Socket paths are short (104 bytes on macOS), so the runtime directory goes under `/tmp`, not `$TMPDIR`.
+- Any `hc` command, `hc connect` among them, starts the core if none runs: stopping it from the app holds the app's reconnection back until the user starts it again.

@@ -753,7 +753,7 @@ func (a *app) paneHeader(c *ui.Context, tab *layout.Tab, terminal string, left, 
 			// The user drags the pane by its title, which shows as much
 			// as the pointer comes over it.
 			title := ui.Row(c.Key("title")).Bind(a.term.TitleHandle(terminal)).AlignItems(ui.Center).Gap(8).
-				Padding(3, 8).Radius(6).Shrink(1).MinWidth(0).Cursor(ui.CursorMove).
+				Padding(3, 8).Radius(6).Shrink(1).MinWidth(0).Clip().Cursor(ui.CursorMove).
 				ContextMenu(func(m *ui.Menu) {
 					if m.Item("Rename").Chosen() {
 						if n := tab.Pane(terminal); n != nil {

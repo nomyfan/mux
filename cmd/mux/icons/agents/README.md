@@ -1,8 +1,10 @@
 # Agent icons
 
-Each file is the mark of a coding agent, named by the kind herdr reports for
-it (`agent` in `agent.list`), which the sidebar shows beside the agent. Only
-Claude Code's and Codex's are here for now; other agents show a generic mark.
+Each file is the mark of a coding agent, which the sidebar shows beside the
+agent. Agents name themselves in their status reports (OSC 7501's `app`, as
+`claude-code` or `codex`), and `agentMarks` in `cmd/mux/model.go` maps those
+names to these files. Only Claude Code's and Codex's are here for now; other
+agents show a generic mark.
 
 The SVGs come from [LobeHub Icons](https://github.com/lobehub/lobe-icons)
 (`@lobehub/icons-static-svg` 1.98.0, MIT): the `-color` version where there

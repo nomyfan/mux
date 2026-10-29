@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -271,8 +272,23 @@ func (a *app) update(fn func()) {
 func (a *app) changed() { a.save() }
 
 // terminalEnv is what a terminal's program is told of the terminal: as
-// its emulator is Ghostty's, the core tells it it runs in Ghostty.
-var terminalEnv = map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
+// its emulator is Ghostty's, the core tells it it runs in Ghostty. Without
+// a locale in env, as an app opened from the Finder has none, it gets
+// UTF-8's, as terminal apps give theirs: in C's, shells take the bytes of
+// a character for characters of their own.
+func terminalEnv(env []string) map[string]string {
+	vars := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	for _, kv := range env {
+		switch name(kv) {
+		case "LANG", "LC_ALL", "LC_CTYPE":
+			if !strings.HasSuffix(kv, "=") {
+				return vars
+			}
+		}
+	}
+	vars["LANG"] = "en_US.UTF-8"
+	return vars
+}
 
 // run starts a shell in a new terminal, in cwd, "" for the core's choice,
 // and gives its address to done once it runs.
@@ -282,7 +298,7 @@ func (a *app) run(cwd string, done func(address string)) {
 		return
 	}
 	go func() {
-		t, err := conn.Run(hc.RunOptions{Cwd: cwd, Env: terminalEnv, Labels: map[string]string{"mux": "1"}, Keep: true, NoParent: true})
+		t, err := conn.Run(hc.RunOptions{Cwd: cwd, Env: terminalEnv(a.env), Labels: map[string]string{"mux": "1"}, Keep: true, NoParent: true})
 		a.update(func() {
 			if gen != a.gen {
 				return
