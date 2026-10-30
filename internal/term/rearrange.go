@@ -30,18 +30,30 @@ type paneDrag struct {
 
 // TitleHandle returns the handle of the title of a pane's header, which
 // the user drags the pane by: the header binds its title to it.
-func (v *View) TitleHandle(paneID string) *ui.Handle {
-	h := v.titles[paneID]
-	if h == nil {
-		h = new(ui.Handle)
-		v.titles[paneID] = h
+func (v *View) TitleHandle(terminal string) *ui.Handle {
+	if p := v.panes[terminal]; p != nil {
+		return &p.title
 	}
-	return h
+	return new(ui.Handle)
+}
+
+// findTitles notes where the panes' titles are in the view, as of the
+// last layout, for the press that drags one.
+func (v *View) findTitles(c *ui.Context) {
+	view := v.handle.Bounds(c)
+	clear(v.titles)
+	for _, b := range v.boxes {
+		if p := v.panes[b.terminal]; p != nil {
+			r := p.title.Bounds(c)
+			r.X, r.Y = r.X-view.X, r.Y-view.Y
+			v.titles[b.terminal] = r
+		}
+	}
 }
 
 // titleAt returns the pane whose title is at x, y in the view.
 func (v *View) titleAt(x, y float32) (string, bool) {
-	for id, r := range v.titleBoxes {
+	for id, r := range v.titles {
 		if r.Contains(x, y) {
 			return id, true
 		}
@@ -54,7 +66,7 @@ func (v *View) titleAt(x, y float32) (string, bool) {
 // no pane but the dragged one.
 func (v *View) dropAt(x, y float32) (target string, side Side, box ui.Rect, ok bool) {
 	b, found := v.cardAt(x, y)
-	if !found || v.paneDrag == nil || b.pane.ID == v.paneDrag.pane {
+	if !found || v.paneDrag == nil || b.terminal == v.paneDrag.pane {
 		return "", 0, ui.Rect{}, false
 	}
 	c := b.card
@@ -78,7 +90,7 @@ func (v *View) dropAt(x, y float32) (target string, side Side, box ui.Rect, ok b
 	case SideBottom:
 		c.Y, c.H = c.Y+c.H/2, c.H/2
 	}
-	return b.pane.ID, side, c, true
+	return b.terminal, side, c, true
 }
 
 // dragInput takes the press on a pane's title, and the pointer's moves
@@ -105,16 +117,16 @@ func (v *View) dragInput(ev ui.InputEvent) bool {
 	return false
 }
 
-// paintDrop shows where the pane the user drags goes, if dropped.
-func (v *View) paintDrop(p *ui.Painter, r ui.Rect) {
+// dropZone shows where the pane the user drags goes, if dropped: over the
+// panes, as their terminals would hide it under them.
+func (v *View) dropZone(c *ui.Context) {
 	d := v.paneDrag
 	if d == nil || !d.moving {
 		return
 	}
 	if _, _, box, ok := v.dropAt(d.x, d.y); ok {
-		box.X, box.Y = box.X+r.X, box.Y+r.Y
-		p.Fill(box, v.accent.Alpha(0.25), 0)
-		p.Stroke(box, v.accent, 0, 2)
+		ui.Box(c.Key("drop zone")).Label("Drop Zone").Absolute().Left(box.X).Top(box.Y).Size(box.W, box.H).
+			Background(v.accent.Alpha(0.25)).Border(2, v.accent)
 	}
 }
 
@@ -124,12 +136,8 @@ func (v *View) dragChip(c *ui.Context) {
 	if d == nil || !d.moving {
 		return
 	}
-	p, ok := v.pane(d.pane)
-	if !ok {
-		return
-	}
 	t := c.Theme()
 	ui.Row(c.Key("drag chip")).Absolute().Left(d.x+12).Top(d.y+12).AlignItems(ui.Center).Gap(8).Padding(4, 10).
 		Background(t.Surface).Radius(8).Border(1, t.Border).Shadow(0, 4, 12, 0, ui.RGB(0, 0, 0).Alpha(0.2)).
-		Children(func() { v.hooks.Title(c, p) })
+		Children(func() { v.hooks.Title(c, d.pane) })
 }

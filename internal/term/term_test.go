@@ -1,222 +1,287 @@
 package term
 
 import (
+	"image/color"
+	"io"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
-	"mux/internal/herdr/endpoint"
+	"mux/internal/hc"
+	"mux/internal/layout"
 )
 
-func TestKeyEvent(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		key  ui.Key
-		mods ui.Modifiers
-		want endpoint.Key
-		ok   bool
-	}{
-		{"Enter", ui.KeyEnter, 0, endpoint.Key{Code: endpoint.KeyEnter}, true},
-		{"Shift+Tab", ui.KeyTab, ui.Shift, endpoint.Key{Code: endpoint.KeyBackTab, Mods: endpoint.ModShift}, true},
-		{"Ctrl+C", ui.KeyC, ui.Ctrl, endpoint.Key{Code: endpoint.KeyChar, Char: 'c', Mods: endpoint.ModCtrl}, true},
-		// Option+Left/Right move by word as Esc b / Esc f; other chords keep the arrow.
-		{"Alt+Left", ui.KeyLeft, ui.Alt, endpoint.Key{Code: endpoint.KeyChar, Char: 'b', Mods: endpoint.ModAlt}, true},
-		{"Alt+Right", ui.KeyRight, ui.Alt, endpoint.Key{Code: endpoint.KeyChar, Char: 'f', Mods: endpoint.ModAlt}, true},
-		{"Shift+Alt+Left", ui.KeyLeft, ui.Shift | ui.Alt, endpoint.Key{Code: endpoint.KeyLeft, Mods: endpoint.ModShift | endpoint.ModAlt}, true},
-		{"F5", ui.KeyF5, 0, endpoint.Key{Code: endpoint.KeyF, F: 5}, true},
-		// Text keys type text, which comes as an InputText.
-		{"a", ui.KeyA, 0, endpoint.Key{}, false},
-		{"Shift+a", ui.KeyA, ui.Shift, endpoint.Key{}, false},
-		{"Option+p", ui.KeyP, ui.Alt, endpoint.Key{}, false},
-		// Command chords are the app's.
-		{"Cmd+C", ui.KeyC, ui.Super, endpoint.Key{}, false},
-		{"Cmd+Enter", ui.KeyEnter, ui.Super, endpoint.Key{}, false},
-	} {
-		got, ok := keyEvent(tc.key, tc.mods)
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("%s: %+v, %v; want %+v, %v", tc.name, got, ok, tc.want, tc.ok)
-		}
-	}
+// fakeStream is a terminal's stream: output fed in, input and sizes kept.
+type fakeStream struct {
+	out *io.PipeReader
+	in  *io.PipeWriter
+
+	mu      sync.Mutex
+	typed   strings.Builder
+	sizes   [][2]int
+	facts   []hc.Display
+	focused []bool
+	closed  bool
 }
 
-func TestCellColors(t *testing.T) {
-	th := terminal.DarkTheme()
-	p := newPalette(th, true)
-	for _, tc := range []struct {
-		name      string
-		cell      endpoint.Cell
-		fg, bg    ui.Color
-		defaultBG bool
-	}{
-		{"default", endpoint.Cell{}, th.Foreground, th.Background, true},
-		{"named red on blue", endpoint.Cell{FG: 2, BG: 5}, th.Palette[1], th.Palette[4], false},
-		{"indexed", endpoint.Cell{FG: 0x01000010, BG: 0x010000e8}, ui.RGB(0, 0, 0), ui.RGB(8, 8, 8), false},
-		{"rgb", endpoint.Cell{FG: 0x02123456}, ui.RGB(0x12, 0x34, 0x56), th.Background, true},
-		{"reversed", endpoint.Cell{Modifier: reversed}, th.Background, th.Foreground, false},
-		{"hidden", endpoint.Cell{FG: 2, Modifier: hidden}, th.Background, th.Background, true},
-	} {
-		fg, bg, def := p.cellColors(&tc.cell)
-		if fg != tc.fg || bg != tc.bg || def != tc.defaultBG {
-			t.Errorf("%s: %v on %v (default %v); want %v on %v (default %v)", tc.name, fg, bg, def, tc.fg, tc.bg, tc.defaultBG)
-		}
-	}
+func (s *fakeStream) Read(p []byte) (int, error) { return s.out.Read(p) }
+func (s *fakeStream) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.typed.Write(p)
+	return len(p), nil
+}
+func (s *fakeStream) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	return s.out.Close()
+}
+func (s *fakeStream) Resize(cols, rows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sizes = append(s.sizes, [2]int{cols, rows})
+}
+func (s *fakeStream) Focus(f bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.focused = append(s.focused, f)
+}
+func (s *fakeStream) Facts(d hc.Display) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.facts = append(s.facts, d)
+}
+func (s *fakeStream) Typed() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.typed.String()
 }
 
-func TestWide(t *testing.T) {
-	for symbol, want := range map[string]bool{
-		"a": false, " ": false, "": false, "é": false, "─": false,
-		"中": true, "，": true, "Ａ": true, "😀": true, "👍🏽": true,
-	} {
-		if got := wide(symbol); got != want {
-			t.Errorf("wide(%q) = %v, want %v", symbol, got, want)
-		}
-	}
+// fakeCore attaches terminals to fake streams.
+type fakeCore struct {
+	mu      sync.Mutex
+	streams map[string]*fakeStream
+	asked   map[string]hc.AttachOptions
 }
 
-// A press on another pane's header focuses it, without the header taking
-// the press, which moves the window along the top.
-func TestHeaderFocus(t *testing.T) {
-	s := &endpoint.Surface{
-		Frame: endpoint.Frame{Width: 60, Height: 20, Cells: make([]endpoint.Cell, 60*20)},
-		Panes: []endpoint.SurfacePane{
-			{ID: "p1", Focused: true, Rect: endpoint.Rect{X: 0, Y: 0, Width: 30, Height: 20}, Inner: endpoint.Rect{X: 1, Y: 1, Width: 28, Height: 18}},
-			{ID: "p2", Rect: endpoint.Rect{X: 30, Y: 0, Width: 30, Height: 20}, Inner: endpoint.Rect{X: 31, Y: 1, Width: 28, Height: 18}},
+func (f *fakeCore) Attach(o hc.AttachOptions) (Stream, error) {
+	r, w := io.Pipe()
+	s := &fakeStream{out: r, in: w}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.streams == nil {
+		f.streams, f.asked = map[string]*fakeStream{}, map[string]hc.AttachOptions{}
+	}
+	f.streams[o.Terminal], f.asked[o.Terminal] = s, o
+	return s, nil
+}
+
+func (f *fakeCore) stream(t string) *fakeStream {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.streams[t]
+}
+
+// twoPanes is a tab of t1 left of t2, t1 focused.
+func twoPanes() *layout.Tab {
+	var l layout.Layout
+	_, tab := l.AddWorkspace("t1")
+	tab.Split("t1", "t2", layout.Right)
+	tab.Focus = "t1"
+	return tab
+}
+
+func newView() *View {
+	return New(terminal.Font{Size: 13}, terminal.LightTheme(), terminal.DarkTheme())
+}
+
+func testHooks(v *View, changed *int) Hooks {
+	return Hooks{
+		Header: func(c *ui.Context, term string, box ui.Rect, hovered, focused bool) {
+			ui.Row(c.Key("title")).Bind(v.TitleHandle(term)).Children(func() { ui.Text(c, "title "+term) })
 		},
-	}
-	var focused string
-	v := New(ui.Font{Size: 14})
-	hooks := Hooks{
-		Header: func(c *ui.Context, p endpoint.SurfacePane, box ui.Rect, hovered bool) { ui.Text(c, p.ID) },
-		Focus:  func(id string) { focused = id },
-		Resize: func(string, []bool, float64) {},
-	}
-	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, nil, hooks).Fill() }, 800, 400)
-	tt.Frame()
-	h := v.boxes()[1].header
-	tt.Press(h.X+h.W/2, h.Y+h.H/2)
-	tt.Release(h.X+h.W/2, h.Y+h.H/2)
-	if focused != "p2" {
-		t.Errorf("a press on p2's header focused %q", focused)
+		Title:   func(c *ui.Context, term string) { ui.Text(c, "dragging "+term) },
+		Changed: func() { *changed++ },
 	}
 }
 
-// Command with an arrow asks the server to focus the pane beside the
-// focused one, with Option to swap it there; in the search field it moves
-// the caret instead.
-func TestPaneMoves(t *testing.T) {
-	_, _, tt, calls := searchView(t)
+// waitFor runs frames until cond holds.
+func waitFor(t *testing.T, tt *ui.Tester, what string, cond func() bool) {
+	t.Helper()
+	for range 300 {
+		if cond() {
+			return
+		}
+		tt.Frame()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no %s", what)
+}
+
+// Panes attach as they show, at the size they fit; their output shows,
+// and what is typed reaches the focused one.
+func TestPanes(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "attach", func() bool { return core.stream("t1") != nil && core.stream("t2") != nil })
+	o := core.asked["t1"]
+	if o.Cols < 20 || o.Cols > 60 || o.History != history || o.Display == nil || o.Display.Cell == nil || o.Display.Background == "" {
+		t.Errorf("attached with %+v", o)
+	}
+	go core.stream("t1").in.Write([]byte("hello \x1b[31mworld\x1b[0m\r\n"))
+	waitFor(t, tt, "output", func() bool { return strings.Contains(v.Terminal("t1").Text(), "hello world") })
+	tt.Type("ls")
+	waitFor(t, tt, "input", func() bool { return core.stream("t1").Typed() == "ls" })
+	if got := core.stream("t2").Typed(); got != "" {
+		t.Errorf("t2 got %q", got)
+	}
+}
+
+// Cmd+arrows move the focus to the pane beside, Cmd+Option+arrows swap
+// the focused pane with it.
+func TestFocusMoves(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "attach", func() bool { return core.stream("t2") != nil })
 	tt.Key(ui.Cmd, ui.KeyRight)
-	tt.Key(ui.Cmd|ui.Ctrl, ui.KeyLeft)
-	tt.Key(ui.Cmd|ui.Alt, ui.KeyDown)
-	want := []struct{ method, direction string }{
-		{"pane.focus_direction", "right"}, {"pane.swap", "down"},
-	}
-	if len(*calls) != len(want) {
-		t.Fatalf("made %d requests, want %d", len(*calls), len(want))
-	}
-	for i, w := range want {
-		c := (*calls)[i]
-		if c.method != w.method || c.params["pane_id"] != "p1" || c.params["direction"] != w.direction {
-			t.Errorf("request %d: %+v, want %v", i, c, w)
-		}
-	}
-	tt.Key(ui.Cmd, ui.KeyF)
 	tt.Frame()
-	n := len(*calls)
-	tt.Key(ui.Cmd, ui.KeyLeft)
-	for _, c := range (*calls)[n:] {
-		if c.method == "pane.focus_direction" {
-			t.Errorf("Cmd+Left in the search field moved the focus: %+v", c)
-		}
+	if tab.Focus != "t2" || changed == 0 {
+		t.Fatalf("focus %q after Cmd+Right", tab.Focus)
+	}
+	tt.Type("x")
+	waitFor(t, tt, "input in t2", func() bool { return core.stream("t2").Typed() == "x" })
+	tt.Key(ui.Cmd|ui.Alt, ui.KeyLeft)
+	tt.Frame()
+	if got := tab.Leaves()[0].Terminal; got != "t2" || tab.Focus != "t2" {
+		t.Errorf("after swapping left: first pane %q, focus %q", got, tab.Focus)
 	}
 }
 
-// A blinking cursor hides and shows every blinkPeriod, shows again as the
-// user types, and stays after blinkFor; a steady one stays.
-func TestCursorBlink(t *testing.T) {
-	for _, tc := range []struct {
-		shape uint8
-		blink bool
-	}{{0, true}, {1, true}, {2, false}, {5, true}, {6, false}} {
-		s := &endpoint.Surface{
-			Frame: endpoint.Frame{Width: 20, Height: 5, Cells: make([]endpoint.Cell, 20*5),
-				Cursor: &endpoint.Cursor{X: 2, Y: 1, Visible: true, Shape: tc.shape}},
-			Panes: []endpoint.SurfacePane{
-				{ID: "p1", Focused: true, Rect: endpoint.Rect{Width: 20, Height: 5}, Inner: endpoint.Rect{Width: 20, Height: 5}},
-			},
-		}
-		v := New(ui.Font{Size: 14})
-		v.Focus()
-		hooks := Hooks{Header: func(c *ui.Context, p endpoint.SurfacePane, box ui.Rect, hovered bool) {}}
-		tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, nil, hooks).Fill() }, 400, 200)
+// A pane dragged by its title onto another swaps with it in the middle,
+// goes beside it by its edge, and stays dropped on itself.
+func TestDragPane(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "titles", func() bool { return len(v.titles) == 2 })
+	tt.Frame()
+	drag := func(from string, tx, ty float32) {
+		title := v.titles[from]
+		x, y := title.X+title.W/2, title.Y+title.H/2
+		tt.Press(x, y)
+		tt.Move(x+10, y+10)
+		tt.Move(tx, ty)
 		tt.Frame()
-		tt.Frame()
-		r := v.cellRect(ui.Rect{}, 2, 1)
-		// The bar's and the block's left edge.
-		pixel := func() uint32 {
-			i := tt.Image()
-			c := i.RGBAAt(int(r.X)+1, int(r.Y+r.H/2))
-			return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
-		}
-		shown := pixel()
-		tt.Advance(blinkPeriod)
-		if hidden := pixel(); (hidden != shown) != tc.blink {
-			t.Errorf("shape %d: %06x after %v, %06x before", tc.shape, hidden, blinkPeriod, shown)
-		}
-		tt.Type("a")
-		tt.Frame()
-		if got := pixel(); got != shown {
-			t.Errorf("shape %d: %06x as the user types, want %06x", tc.shape, got, shown)
-		}
-		tt.Advance(blinkFor + blinkPeriod)
-		if got := pixel(); got != shown {
-			t.Errorf("shape %d: %06x after %v, want %06x", tc.shape, got, blinkFor, shown)
-		}
+	}
+	p2 := v.boxes[1].card
+	center := func() color.RGBA { return tt.Image().RGBAAt(int(p2.X+p2.W/2), int(p2.Y+p2.H/2)) }
+	plain := center()
+	drag("t1", p2.X+p2.W/2, p2.Y+p2.H/2)
+	if !tt.HasText("dragging t1") {
+		t.Errorf("no chip while dragging: %q", tt.Texts())
+	}
+	// The zone covers the whole target, over its terminal.
+	if zone, ok := tt.Find("Drop Zone"); !ok || zone != p2 {
+		t.Errorf("drop zone %v, want %v", zone, p2)
+	}
+	if center() == plain {
+		t.Error("the drop zone doesn't show over the terminal")
+	}
+	tt.Release(p2.X+p2.W/2, p2.Y+p2.H/2)
+	tt.Frame()
+	if got := tab.Leaves()[0].Terminal; got != "t2" {
+		t.Fatalf("dropped in the middle, first pane %q", got)
+	}
+	if tt.HasText("dragging t1") {
+		t.Error("the chip stayed after the drop")
+	}
+	// t1 is on the right now: dropped on t2's bottom edge, it goes below.
+	tt.Frame()
+	p := v.boxes[0].card
+	drag("t1", p.X+p.W/2, p.Y+p.H-5)
+	if zone, _ := tt.Find("Drop Zone"); zone != (ui.Rect{X: p.X, Y: p.Y + p.H/2, W: p.W, H: p.H / 2}) {
+		t.Errorf("drop zone %v by the bottom of %v", zone, p)
+	}
+	tt.Release(p.X+p.W/2, p.Y+p.H-5)
+	tt.Frame()
+	if root := tab.Root; !root.Vertical || root.A.Terminal != "t2" || root.B.Terminal != "t1" {
+		t.Errorf("dropped below: %+v %+v", root.A, root.B)
+	}
+	// Onto itself: nothing.
+	before := changed
+	tt.Frame()
+	b := v.boxes[1].card
+	drag("t1", b.X+b.W/2, b.Y+b.H/2)
+	tt.Release(b.X+b.W/2, b.Y+b.H/2)
+	if changed != before || tab.Root.B.Terminal != "t1" {
+		t.Error("a pane dropped on itself moved")
 	}
 }
 
-// recorder is an endpoint keeping the input the view sends.
-type recorder struct {
-	discard
-	input []endpoint.InputEvent
+// Dragging a divider moves its split.
+func TestDivider(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 801, 400)
+	tt.Frame()
+	tt.Frame()
+	l := v.dividers[0].Line
+	x, y := l.X, l.Y+l.H/2
+	tt.Press(x, y)
+	tt.Move(x+40, y)
+	tt.Move(x+80, y)
+	tt.Release(x+80, y)
+	tt.Frame()
+	if r := tab.Root.Ratio; r < 0.55 || r > 0.65 {
+		t.Errorf("ratio %v after dragging the divider 80 right", r)
+	}
+	if changed == 0 {
+		t.Error("the drag's end saved nothing")
+	}
 }
 
-func (r *recorder) Input(_ string, events ...endpoint.InputEvent) error {
-	r.input = append(r.input, events...)
-	return nil
-}
-
-// A trackpad scroll of several rows goes to the scrollback as one event of
-// that many rows, and to a program reading the wheel, which the server
-// sends one report or key per event, as that many one-row events.
-func TestWheel(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		mouse, alt    bool
-		events, lines int
-	}{
-		{"scrollback", false, false, 1, 3},
-		{"mouse reporting", true, false, 3, 1},
-		{"alternate screen", false, true, 3, 1},
-	} {
-		pane := endpoint.SurfacePane{ID: "p1", Rect: endpoint.Rect{Width: 20, Height: 10}, Inner: endpoint.Rect{Width: 20, Height: 10},
-			MouseReporting: tc.mouse, AltScreen: tc.alt}
-		s := &endpoint.Surface{Frame: endpoint.Frame{Width: 20, Height: 10, Cells: make([]endpoint.Cell, 20*10)}, Panes: []endpoint.SurfacePane{pane}}
-		v := New(ui.Font{Size: 14})
-		ep := &recorder{}
-		var requests []map[string]any
-		tt := ui.NewTester(func(c *ui.Context) { v.Build(c, s, ep, hooks(&requests)).Fill() }, 600, 300)
-		tt.Frame()
-		r := v.cellRect(ui.Rect{}, 5, 5)
-		tt.Scroll(r.X, r.Y, 0, 3.5*v.cellH)
-		if len(ep.input) != tc.events {
-			t.Fatalf("%s: sent %d events, want %d", tc.name, len(ep.input), tc.events)
-		}
-		for _, ev := range ep.input {
-			if m, ok := ev.(endpoint.Mouse); !ok || int(m.Lines) != tc.lines {
-				t.Errorf("%s: sent %+v, want a scroll of %d rows", tc.name, ev, tc.lines)
+// Panes laid out as the tab first shows build again at their size, without
+// anything else asking for a frame.
+func TestLaysOutUnasked(t *testing.T) {
+	core := &fakeCore{}
+	v, changed := newView(), 0
+	var tab *layout.Tab
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+			if tab != nil {
+				v.Build(c, tab, core, testHooks(v, &changed)).Grow(1)
 			}
+		})
+	}, 800, 400)
+	tab = twoPanes()
+	tt.Frame()
+	for range 10 {
+		if !tt.FramePending() {
+			break
 		}
+		tt.Frame()
 	}
+	if len(v.boxes) != 2 || !tt.HasText("title t1") {
+		t.Errorf("laid out %d panes, showing %q", len(v.boxes), tt.Texts())
+	}
+}
+
+// A pane whose terminal attaches again, as its program restarted, takes
+// the keyboard again if it had it.
+func TestDropKeepsFocus(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "focus", func() bool { return v.Focused() == "t1" })
+	v.Drop("t1")
+	waitFor(t, tt, "focus again", func() bool { return v.Focused() == "t1" && tt.Focused("Terminal") })
+	tt.Type("x")
+	waitFor(t, tt, "input", func() bool { return core.stream("t1").Typed() == "x" })
 }

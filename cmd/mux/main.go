@@ -1,19 +1,16 @@
-// Mux is a native client of herdr: the session's tabs in a sidebar, with
-// the states of their agents, beside the tab chosen, which herdr lays out
-// and the app paints.
+// Mux is a native client of herdr-core, the terminal runtime of hc: its
+// terminals in workspaces and tabs in a sidebar, with the states of their
+// agents, beside the tab chosen, whose panes show the terminals with
+// libghostty-vt. The core runs the programs; Mux arranges them.
 package main
 
 import (
 	"cmp"
 	"embed"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,29 +18,43 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"mux/internal/herdr/endpoint"
-	"mux/internal/herdr/server"
+	"mux/internal/hc"
+	"mux/internal/layout"
 	"mux/internal/term"
 )
 
 type app struct {
-	socket string
-	win    *mygo.Window
-	// serverDown is set as no server listens on the socket; starting while
-	// the app starts one, and stopping while the user confirms stopping it.
-	// serverErr is why starting or stopping it failed.
-	serverDown bool
-	starting   bool
-	stopping   bool
-	serverErr  string
-	// conn is the connection to herdr's client endpoint, nil while there is
-	// none; snap and surface are what it last showed.
-	conn    *endpoint.Conn
-	snap    endpoint.Snapshot
-	surface *endpoint.Surface
-	err     string
-	// chosen is the tab the sidebar shows chosen: the one the client's
-	// view shows, or one the user chose that the server is focusing.
+	win *mygo.Window
+	// post runs a function on the main thread: the window's Update.
+	post func(func())
+	// bin is the herdr-core command, "" until found; notInstalled while
+	// none is. env is the environment it runs in, once read.
+	bin          string
+	notInstalled bool
+	env          []string
+	// gate holds the connection back while the user stopped the core;
+	// starting while it starts again, stopping while the user confirms
+	// stopping it. serverErr is why starting or stopping it failed.
+	gate      gate
+	starting  bool
+	stopping  bool
+	serverErr string
+	// conn is the connection to the core, nil while there is none; gen
+	// counts connections, so that what an old one answers is dropped.
+	// terms are its terminals.
+	conn  *hc.Conn
+	gen   int
+	terms hc.Terminals
+	err   string
+	// lay is the layout, as of the document's layVersion; saving while a
+	// write of it goes, dirty while it changed since.
+	lay        layout.Layout
+	layVersion uint64
+	saving     bool
+	dirty      bool
+	branches   map[string]*branch
+	// chosen is the item the sidebar shows chosen: a tab, or an agent's
+	// terminal.
 	chosen        string
 	term          *term.View
 	services      ui.Services
@@ -54,10 +65,7 @@ type app struct {
 	// hide and show.
 	collapsed map[string]bool
 	itemLists map[string]*ui.Handle
-	// tabFocus holds the pane each tab last focused, as the snapshots
-	// told: herdr focuses it again as the tab shows.
-	tabFocus map[string]string
-	// renaming is the workspace whose name the sidebar edits, newLabel
+	// renaming is the workspace, tab or pane whose name is edited, newLabel
 	// what it is edited to; editing, once renameInput has the focus.
 	renaming    string
 	newLabel    string
@@ -91,24 +99,9 @@ type app struct {
 	previewFont   ui.Font
 	previewGlyphs [][][]ui.Glyph
 
-	// queue holds the requests waiting to be sent: the endpoint takes one
-	// at a time, refusing another until it has answered (endpoint_busy).
-	// sent is the one it is answering, if any.
-	queue []*reply
-	sent  *reply
-
-	// inbox holds the messages the connection read for the main thread.
+	// inbox holds the events the connection read for the main thread.
 	mu    sync.Mutex
-	inbox []any
-}
-
-// reply is a request, and its response as its chunks come, for done.
-type reply struct {
-	method string
-	params any
-	id     string
-	data   []byte
-	done   func(result json.RawMessage, err error)
+	inbox []hc.Event
 }
 
 const (
@@ -146,7 +139,7 @@ var (
 var agentIconFiles embed.FS
 
 // agentIcons are the agents' own marks in their own colors, those without
-// colors drawn in currentColor, by the kind herdr names them with.
+// colors drawn in currentColor, by the names agentMarks gives them.
 var agentIcons = func() map[string]*ui.SVG {
 	entries, _ := agentIconFiles.ReadDir("icons/agents")
 	icons := make(map[string]*ui.SVG, len(entries))
@@ -164,18 +157,16 @@ func (a *app) view(c *ui.Context) {
 		a.sidebarHidden = !a.sidebarHidden
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyD) {
-		a.splitFocused("right")
+		a.splitFocused(layout.Right)
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyD) {
-		a.splitFocused("down")
+		a.splitFocused(layout.Down)
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.openSettings()
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter) {
-		if p, ok := a.focusedPane(); ok {
-			a.request("pane.zoom", map[string]any{"pane_id": p.ID, "mode": "toggle"}, nil)
-		}
+		a.toggleZoom()
 	}
 	for _, fc := range a.fileCommands() {
 		if c.Shortcut(fc.mods, fc.key) {
@@ -183,16 +174,16 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	// Command-Shift-[ and ] go to the workspace's tab before and after the
-	// focused one, Command-1 to 8 to its first eight, Command-9 to its last.
+	// one shown, Command-1 to 8 to its first eight, Command-9 to its last.
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketLeft) {
-		a.focusTab(a.tabBeside(-1))
+		a.showTab(a.tabBeside(-1))
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketRight) {
-		a.focusTab(a.tabBeside(1))
+		a.showTab(a.tabBeside(1))
 	}
 	for i, k := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 		if c.Shortcut(ui.Cmd, k) {
-			a.focusTab(a.tabNumber(i + 1))
+			a.showTab(a.tabNumber(i + 1))
 		}
 	}
 	t := c.Theme()
@@ -209,7 +200,7 @@ func (a *app) view(c *ui.Context) {
 		if w > 0 {
 			ui.Box(c).Width(1).Background(t.Border)
 		}
-		// The terminal takes the room the sidebar leaves once it settles.
+		// The terminals take the room the sidebar leaves once it settles.
 		room, settled := float32(0), float32(0)
 		if w > 0 {
 			room = w + 1
@@ -250,37 +241,38 @@ func (a *app) view(c *ui.Context) {
 	a.confirmStopServer(c)
 }
 
-// sidebar is the session's panes by workspace, under the room the window
-// controls take.
+// sidebar is the workspaces' tabs, and the agents, under the room the
+// window controls take.
 func (a *app) sidebar(c *ui.Context) {
 	ui.Box(c).Height(a.titleBand(c)).Shrink(0).DragWindow()
+	if _, t := a.lay.ActiveTab(); t != nil && a.chosen == "" {
+		a.chosen = t.ID
+	}
 	ui.Sidebar(c, &a.chosen, func() {
 		prev := ""
-		for _, ws := range a.snap.Workspaces {
+		for _, ws := range a.lay.Workspaces {
 			a.section(c, ws.ID, prev, func(open bool) { a.workspaceHeader(c, ws, open) }, func() {
-				for _, tab := range a.snap.Tabs {
-					if tab.Workspace == ws.ID {
-						a.tabItem(c, tab)
-					}
+				for _, tab := range ws.Tabs {
+					a.tabItem(c, ws, tab)
 				}
 			})
 			prev = ws.ID
 		}
-		if len(a.snap.Agents) > 0 {
+		if agents := a.agents(); len(agents) > 0 {
 			a.section(c, agentsSection, prev, func(open bool) { a.agentsHeader(c, open) }, func() {
-				for _, ag := range a.snap.Agents {
+				for _, ag := range agents {
 					a.agentItem(c, ag)
 				}
 			})
 		}
-	}).Grow(1).Label("Tabs and Agents").OnChange(a.focusChosen)
-	// Without a server, the panes' room says so.
-	if a.err != "" && !a.serverDown {
+	}).Grow(1).Label("Tabs and Agents").OnChange(a.showChosen)
+	// Without a core, the panes' room says so.
+	if a.err != "" && !a.notInstalled && !a.stopped() {
 		ui.Text(c, a.err).FontSize(12).TextColor(c.Theme().Danger).Padding(8, 12)
 	}
 	if cl := a.closing; cl != nil {
 		if ui.AlertDialog(c, &a.confirming, fmt.Sprintf("Close “%s”?", cl.name), "Its panes close, and what runs in them stops.", "Cancel", "Close") == 1 {
-			a.request(cl.method, cl.params, nil)
+			a.kill(cl.terminals...)
 		}
 		if !a.confirming {
 			a.closing = nil
@@ -289,11 +281,10 @@ func (a *app) sidebar(c *ui.Context) {
 }
 
 // closing is a workspace or tab to close, by name, once the user confirms,
-// with the request closing it.
+// with the terminals of its panes.
 type closing struct {
-	name   string
-	method string
-	params map[string]any
+	name      string
+	terminals []string
 }
 
 // confirmClose asks the user to confirm closing what cl names.
@@ -368,31 +359,31 @@ func (a *app) agentsHeader(c *ui.Context, open bool) {
 
 // agentItem shows an agent in the sidebar by its pane's name, else its
 // own, beside the workspace it works in, with its state; choosing it
-// focuses its pane.
-func (a *app) agentItem(c *ui.Context, ag endpoint.Agent) {
+// shows its pane.
+func (a *app) agentItem(c *ui.Context, ag hc.Terminal) {
 	t := c.Theme()
-	pane := a.snapPane(ag.Pane)
-	icon, mark := itemIcon(ag, true)
-	item := ui.SidebarItem(c.Key("agent "+ag.Pane), ag.Pane, blankIcon, cmp.Or(pane.Label, ag.Agent, paneLabel(pane)))
-	chosenLook(c, item, ag.Pane == a.chosen)
+	icon, mark := a.itemIcon(ag.Address)
+	item := ui.SidebarItem(c.Key("agent "+ag.Address), ag.Address, blankIcon, a.paneName(ag.Address))
+	chosenLook(c, item, ag.Address == a.chosen)
 	item.Children(func() {
 		iconOver(c, icon, mark)
-		for _, ws := range a.snap.Workspaces {
-			if ws.ID == pane.Workspace {
-				ui.Text(c, ws.Label).FontSize(t.FontSize - 1).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
-			}
+		where := a.dirOf(ag.Address)
+		if ws, _, _ := a.lay.Find(ag.Address); ws != nil {
+			where = a.workspaceName(ws)
 		}
-		statusDot(c, ag.Status)
+		ui.Text(c, where).FontSize(t.FontSize - 1).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
+		statusDot(c, ag.Status.State)
 	})
 }
 
-// itemIcon returns what shows for what an agent, if any, isAgent, runs:
-// the agent's mark, if it has one, else an icon, a shell's or an agent's.
-func itemIcon(agent endpoint.Agent, isAgent bool) (icon, mark *ui.SVG) {
-	switch mark, ok := agentIcons[agent.Agent]; {
-	case ok:
-		return nil, mark
-	case isAgent:
+// itemIcon returns what shows for what a terminal runs: its agent's mark,
+// if it has one, else an icon, an agent's or a shell's.
+func (a *app) itemIcon(address string) (icon, mark *ui.SVG) {
+	s, isAgent := a.agent(address)
+	if isAgent {
+		if mark, ok := agentIcons[agentMarks[s.App]]; ok {
+			return nil, mark
+		}
 		return agentIcon, nil
 	}
 	return shellIcon, nil
@@ -428,26 +419,25 @@ func chosenLook(c *ui.Context, item ui.Element, chosen bool) {
 }
 
 // workspaceHeader names a workspace in the sidebar, which a click on it,
-// or its arrow, shows the panes of or hides, with buttons making a tab in
+// or its arrow, shows the tabs of or hides, with buttons making a tab in
 // it and opening its menu, as a secondary click on it does; the buttons
 // show as the pointer comes over it, or one has the focus, as while the
 // menu is open.
-func (a *app) workspaceHeader(c *ui.Context, ws endpoint.Workspace, open bool) {
+func (a *app) workspaceHeader(c *ui.Context, ws *layout.Workspace, open bool) {
 	t := c.Theme()
 	head := ui.Row(c.Key("head")).Height(28).AlignItems(ui.Center).Gap(2).Padding(0, t.Space(1), 0, t.Space(2)).Radius(t.Radius).Shrink(0).
 		ContextMenu(a.workspaceMenu(ws))
 	shown := head.Hovered() || head.FocusWithin()
 	toggle := head.Clicked()
+	name := a.workspaceName(ws)
 	head.Children(func() {
 		if a.renaming == ws.ID {
-			a.renameField(c, "Workspace Name", ws.Label, func(name string) {
-				// herdr would name it nothing.
-				if name != "" {
-					a.request("workspace.rename", map[string]any{"workspace_id": ws.ID, "label": name}, nil)
-				}
-			}).Grow(1).MinWidth(0).Height(24).Padding(0, 4).FontSize(t.FontSize - 1)
+			a.renameField(c, "Workspace Name", ws.Name, func(name string) {
+				ws.Name = name
+				a.save()
+			}).Placeholder(name).Grow(1).MinWidth(0).Height(24).Padding(0, 4).FontSize(t.FontSize - 1)
 		} else {
-			ui.Text(c, ws.Label).FontSize(t.FontSize - 1).FontWeight(600).TextColor(t.TextMuted).Grow(1).SingleLine()
+			ui.Text(c, name).FontSize(t.FontSize - 1).FontWeight(600).TextColor(t.TextMuted).Grow(1).SingleLine()
 		}
 		// Hidden, the buttons keep their room, and the menu its button.
 		actions := ui.Row(c.Key("actions")).Gap(2).Shrink(0)
@@ -474,22 +464,13 @@ func (a *app) workspaceHeader(c *ui.Context, ws endpoint.Workspace, open bool) {
 }
 
 // tabItem shows a tab in the sidebar by its name, if it was given one,
-// else by its active pane: the pane's name, its agent, or its directory;
+// else by its focused pane: the pane's name, its agent, or its directory;
 // with the state of the tab's agent that most needs the user, and a button
 // closing it, once the user confirms, as the pointer comes over it, as its
 // menu does.
-func (a *app) tabItem(c *ui.Context, tab endpoint.Tab) {
-	pane := a.activePane(tab.ID)
-	agent, isAgent := a.agentIn(pane.ID)
-	var agents []endpoint.Agent
-	for _, p := range a.snap.Panes {
-		if ag, ok := a.agentIn(p.ID); ok && p.Tab == tab.ID {
-			agents = append(agents, ag)
-		}
-	}
-	status := urgentStatus(agents)
+func (a *app) tabItem(c *ui.Context, ws *layout.Workspace, tab *layout.Tab) {
 	name, shown := a.tabNames(tab)
-	icon, mark := itemIcon(agent, isAgent)
+	icon, mark := a.itemIcon(tab.Focus)
 	if a.renaming == tab.ID {
 		a.renameTab(c, tab, icon, mark, name, shown)
 		return
@@ -506,6 +487,7 @@ func (a *app) tabItem(c *ui.Context, tab endpoint.Tab) {
 	})
 	chosenLook(c, item, tab.ID == a.chosen)
 	hovered := item.Hovered()
+	status := a.tabStatus(tab)
 	item.Children(func() {
 		iconOver(c, icon, mark)
 		switch {
@@ -525,68 +507,25 @@ func (a *app) tabItem(c *ui.Context, tab endpoint.Tab) {
 	})
 }
 
-// tabNames returns the name a tab was given, if any, and what it shows
-// without one: its active pane's name, its agent, or its directory.
-func (a *app) tabNames(tab endpoint.Tab) (name, shown string) {
-	pane := a.activePane(tab.ID)
-	shown = paneLabel(pane)
-	if agent, isAgent := a.agentIn(pane.ID); isAgent && pane.Label == "" {
-		shown = cmp.Or(agent.Agent, shown)
+// tabTerminals returns the terminals of a tab's panes.
+func tabTerminals(tab *layout.Tab) []string {
+	var out []string
+	for _, n := range tab.Leaves() {
+		out = append(out, n.Terminal)
 	}
-	// herdr names a tab by its number, until it is given a name.
-	name = tab.Label
-	if _, err := strconv.Atoi(name); err == nil {
-		name = ""
-	}
-	return name, shown
+	return out
 }
 
 // closeTab closes a tab, once the user confirms.
-func (a *app) closeTab(tab endpoint.Tab) {
+func (a *app) closeTab(tab *layout.Tab) {
 	name, shown := a.tabNames(tab)
-	a.confirmClose(closing{cmp.Or(name, shown), "tab.close", map[string]any{"tab_id": tab.ID}})
-}
-
-// urgentStatus is the state of the agent that most needs the user: one
-// waiting on them, else one working, else one done.
-func urgentStatus(agents []endpoint.Agent) string {
-	rank := map[string]int{"blocked": 3, "working": 2, "done": 1}
-	status := ""
-	for _, ag := range agents {
-		if status == "" || rank[ag.Status] > rank[status] {
-			status = ag.Status
-		}
-	}
-	return status
-}
-
-// activePane returns a tab's active pane: the one it last focused, as the
-// app saw, else, as the tab has not shown since the app started, its first
-// agent's, else its first.
-func (a *app) activePane(tabID string) endpoint.Pane {
-	var focused, firstAgent, first endpoint.Pane
-	for _, p := range a.snap.Panes {
-		if p.Tab != tabID {
-			continue
-		}
-		if first.ID == "" {
-			first = p
-		}
-		if _, ok := a.agentIn(p.ID); ok && firstAgent.ID == "" {
-			firstAgent = p
-		}
-		if p.ID == a.tabFocus[tabID] {
-			focused = p
-		}
-	}
-	return cmp.Or(focused, firstAgent, first)
+	a.confirmClose(closing{cmp.Or(name, shown), tabTerminals(tab)})
 }
 
 // renameTab edits the name of a tab, if any, in place of its item, as tall
-// as the item, beside its icon, or mark, if any: no name, which herdr
-// cannot give, names it by its number again, as herdr does a new tab, and
-// what it shows without a name, unnamed, shows for it again.
-func (a *app) renameTab(c *ui.Context, tab endpoint.Tab, icon, mark *ui.SVG, name, unnamed string) {
+// as the item, beside its icon, or mark, if any: no name shows what the
+// tab shows without one, unnamed, again.
+func (a *app) renameTab(c *ui.Context, tab *layout.Tab, icon, mark *ui.SVG, name, unnamed string) {
 	t := c.Theme()
 	ui.Row(c.Key(tab.ID)).AlignItems(ui.Center).Gap(t.Space(2)).Padding(t.Space(1.5), t.Space(2)).Shrink(0).Children(func() {
 		drawIcon(c, icon, mark)
@@ -595,34 +534,11 @@ func (a *app) renameTab(c *ui.Context, tab endpoint.Tab, icon, mark *ui.SVG, nam
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
 			ui.Text(c, " ").SingleLine()
 			a.renameField(c, "Tab Name", name, func(name string) {
-				a.request("tab.rename", map[string]any{"tab_id": tab.ID, "label": cmp.Or(name, strconv.Itoa(tab.Number))}, nil)
+				tab.Name = name
+				a.save()
 			}).Placeholder(unnamed).Absolute().Left(-4).Right(0).Top(-3).Bottom(-3).Padding(0, 4)
 		})
 	})
-}
-
-// newTab makes a tab in a workspace and focuses it, giving its pane the
-// keyboard. Where it starts is the server's to choose, as herdr's new_cwd
-// says: by default, where the workspace's focused pane is.
-func (a *app) newTab(workspaceID string) {
-	if workspaceID == "" {
-		return
-	}
-	a.request("tab.create", map[string]any{"workspace_id": workspaceID, "focus": true}, nil)
-	// The new tab's pane shows.
-	a.collapse(workspaceID, false)
-	a.term.Focus()
-}
-
-// newWorkspace makes a workspace and focuses it, as newTab does a tab:
-// by default, where the focused pane is.
-func (a *app) newWorkspace() {
-	params := map[string]any{"focus": true}
-	if ws := a.snap.FocusedWorkspace; ws != "" {
-		params["source_workspace_id"] = ws
-	}
-	a.request("workspace.create", params, nil)
-	a.term.Focus()
 }
 
 // fileCommand is a command of the File menu, which takes its key before
@@ -638,12 +554,21 @@ type fileCommand struct {
 
 func (a *app) fileCommands() []fileCommand {
 	return []fileCommand{
-		{label: "New Tab", mods: ui.Cmd, key: ui.KeyT, accel: "CmdOrCtrl+T", run: func() { a.newTab(a.snap.FocusedWorkspace) }},
+		{label: "New Tab", mods: ui.Cmd, key: ui.KeyT, accel: "CmdOrCtrl+T", run: a.newTabHere},
 		{label: "New Workspace", mods: ui.Cmd, key: ui.KeyN, accel: "CmdOrCtrl+N", run: a.newWorkspace},
 		// Closing a tab asks first; a pane closes at once, on the chord
 		// harder to press by mistake.
-		{label: "Close Tab…", mods: ui.Cmd, key: ui.KeyW, accel: "CmdOrCtrl+W", run: a.closeFocusedTab, group: true},
+		{label: "Close Tab…", mods: ui.Cmd, key: ui.KeyW, accel: "CmdOrCtrl+W", run: a.closeShownTab, group: true},
 		{label: "Close Pane", mods: ui.Cmd | ui.Shift, key: ui.KeyW, accel: "Shift+CmdOrCtrl+W", run: a.closeFocusedPane},
+	}
+}
+
+// newTabHere makes a tab in the workspace shown, or a workspace if none.
+func (a *app) newTabHere() {
+	if ws, _ := a.lay.ActiveTab(); ws != nil {
+		a.newTab(ws.ID)
+	} else {
+		a.newWorkspace()
 	}
 }
 
@@ -657,7 +582,7 @@ func (a *app) menu() *mygo.Menu {
 			file = append(file, mygo.Separator())
 		}
 		file = append(file, &mygo.MenuItem{Label: fc.label, Accelerator: fc.accel, Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.win.Update(func() {
+			a.update(func() {
 				if !a.settingsOpen && !a.confirming && !a.stopping {
 					fc.run()
 				}
@@ -676,75 +601,59 @@ func (a *app) menu() *mygo.Menu {
 // closeFocusedPane closes the focused pane of the tab shown, as its
 // header's button does.
 func (a *app) closeFocusedPane() {
-	if p, ok := a.focusedPane(); ok {
-		a.request("pane.close", map[string]any{"pane_id": p.ID}, nil)
+	if t := a.focusedTerminal(); t != "" {
+		a.kill(t)
 	}
 }
 
-// closeFocusedTab closes the focused tab, once the user confirms.
-func (a *app) closeFocusedTab() {
-	for _, tab := range a.snap.Tabs {
-		if tab.ID == a.snap.FocusedTab {
-			a.closeTab(tab)
-		}
+// closeShownTab closes the tab shown, once the user confirms.
+func (a *app) closeShownTab() {
+	if _, tab := a.lay.ActiveTab(); tab != nil {
+		a.closeTab(tab)
 	}
 }
 
-// workspaceTabs returns the focused workspace's tabs, in the sidebar's
-// order, with the place of the focused one among them, -1 if none.
-func (a *app) workspaceTabs() (tabs []endpoint.Tab, focused int) {
-	focused = -1
-	for _, tab := range a.snap.Tabs {
-		if tab.Workspace == a.snap.FocusedWorkspace {
-			if tab.ID == a.snap.FocusedTab {
-				focused = len(tabs)
-			}
-			tabs = append(tabs, tab)
-		}
-	}
-	return tabs, focused
-}
-
-// tabBeside returns the tab step places after the focused one in its
+// tabBeside returns the tab step places after the one shown in its
 // workspace, around from the last to the first, or "" if none.
 func (a *app) tabBeside(step int) string {
-	tabs, i := a.workspaceTabs()
-	if i < 0 {
+	ws, tab := a.lay.ActiveTab()
+	if ws == nil {
 		return ""
 	}
-	n := len(tabs)
-	return tabs[((i+step)%n+n)%n].ID
+	n := len(ws.Tabs)
+	for i, t := range ws.Tabs {
+		if t == tab {
+			return ws.Tabs[((i+step)%n+n)%n].ID
+		}
+	}
+	return ""
 }
 
-// tabNumber returns the focused workspace's nth tab, from 1, its last for
+// tabNumber returns the shown workspace's nth tab, from 1, its last for
 // 9, or "" if none.
 func (a *app) tabNumber(n int) string {
-	tabs, _ := a.workspaceTabs()
-	if n == 9 {
-		n = len(tabs)
-	}
-	if n < 1 || n > len(tabs) {
+	ws, _ := a.lay.ActiveTab()
+	if ws == nil {
 		return ""
 	}
-	return tabs[n-1].ID
-}
-
-// focusTab focuses a tab, if any other than the focused one.
-func (a *app) focusTab(id string) {
-	if id != "" && id != a.snap.FocusedTab {
-		a.request("tab.focus", map[string]string{"tab_id": id}, nil)
+	if n == 9 {
+		n = len(ws.Tabs)
 	}
+	if n < 1 || n > len(ws.Tabs) {
+		return ""
+	}
+	return ws.Tabs[n-1].ID
 }
 
 // workspaceMenu builds the menu of a workspace's actions.
-func (a *app) workspaceMenu(ws endpoint.Workspace) func(m *ui.Menu) {
+func (a *app) workspaceMenu(ws *layout.Workspace) func(m *ui.Menu) {
 	return func(m *ui.Menu) {
 		if m.Item("Rename").Chosen() {
-			a.renaming, a.newLabel = ws.ID, ws.Label
+			a.renaming, a.newLabel = ws.ID, ws.Name
 		}
 		m.Separator()
 		if m.Item("Close Workspace…").Chosen() {
-			a.confirmClose(closing{ws.Label, "workspace.close", map[string]any{"workspace_id": ws.ID}})
+			a.confirmClose(closing{a.workspaceName(ws), ws.Terminals()})
 		}
 	}
 }
@@ -782,192 +691,174 @@ func (a *app) renameField(c *ui.Context, label, current string, rename func(name
 	return field
 }
 
-// pane is the focused tab, each of its panes under a header naming it.
+// pane is the tab shown, each of its panes under a header naming it.
 // The headers along the top hold the window controls' room: titleLeft is
 // where the top-left one's title starts.
 func (a *app) pane(c *ui.Context, titleLeft float32) {
 	bar := c.TitleBar()
-	var ep term.Endpoint
-	if a.conn != nil {
-		ep = a.conn
-	}
-	header := func(c *ui.Context, p endpoint.SurfacePane, box ui.Rect, hovered bool) {
-		left, right := float32(12), float32(8)
-		if p.Rect.Y == 0 {
-			if p.Rect.X == 0 {
-				left = max(left, titleLeft-box.X)
-			}
-			// The window's buttons on the right (Linux, Windows).
-			if p.Rect.X+p.Rect.Width >= a.surface.Frame.Width {
-				right += bar.Right
-			}
-		}
-		a.paneHeader(c, p, left, right, p.Focused || hovered)
-	}
-	resize := func(paneID string, path []bool, ratio float64) {
-		// The root split's path is empty, not missing.
-		a.request("layout.set_split_ratio", map[string]any{"pane_id": paneID, "path": append([]bool{}, path...), "ratio": ratio}, nil)
-	}
-	if a.conn == nil && a.serverDown {
+	if a.conn == nil && (a.notInstalled || a.stopped()) {
 		a.serverDownView(c)
 		return
 	}
-	hooks := term.Hooks{Header: header, Focus: a.focusPane, Resize: resize, Request: a.request,
-		Title:     func(c *ui.Context, p endpoint.SurfacePane) { a.paneTitle(c, p, false) },
-		Rearrange: a.rearrange}
-	a.term.Build(c, a.surface, ep, hooks).Grow(1).MinWidth(0).AutoFocus()
+	_, tab := a.lay.ActiveTab()
+	if tab == nil {
+		a.emptyView(c)
+		return
+	}
+	header := func(c *ui.Context, terminal string, box ui.Rect, hovered, focused bool) {
+		left, right := float32(12), float32(8)
+		if box.Y == 0 {
+			if box.X == 0 {
+				left = max(left, titleLeft)
+			}
+			// The window's buttons on the right (Linux, Windows).
+			if a.term.AtRight(box) {
+				right += bar.Right
+			}
+		}
+		a.paneHeader(c, tab, terminal, left, right, focused, focused || hovered)
+	}
+	hooks := term.Hooks{Header: header, Changed: a.changed,
+		Title: func(c *ui.Context, terminal string) { a.paneTitle(c, terminal, false, false) }}
+	a.term.Build(c, tab, a.attacher(), hooks).Grow(1).MinWidth(0)
+}
+
+// emptyView shows, in place of the panes, that there are none, with a
+// button making a tab.
+func (a *app) emptyView(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+		ui.Row(c).Height(a.titleBand(c)).Shrink(0).DragWindow()
+		ui.Column(c).Grow(1).Center().Gap(t.Space(3)).Padding(0, t.Space(6), a.titleBand(c), t.Space(6)).Children(func() {
+			if a.conn == nil {
+				ui.Text(c, "Connecting to herdr-core…").TextColor(t.TextMuted)
+				return
+			}
+			ui.Text(c, "No tabs").FontSize(t.FontSize + 2).Bold()
+			if ui.PrimaryButton(c.Key("new-tab"), "New Tab").Clicked() {
+				a.newTabHere()
+			}
+		})
+	})
 }
 
 // paneHeader shows what a pane runs, where, and on which branch, with the
 // actions on it while actions holds: as the pane has the focus or the
 // pointer.
-func (a *app) paneHeader(c *ui.Context, sp endpoint.SurfacePane, left, right float32, actions bool) {
+func (a *app) paneHeader(c *ui.Context, tab *layout.Tab, terminal string, left, right float32, focused, actions bool) {
 	t := c.Theme()
-	p := a.snapPane(sp.ID)
 	// The title's own padding lines its text up with the header's.
 	ui.Row(c).Grow(1).Height(28).AlignItems(ui.Center).Gap(8).Padding(0, right, 0, left-8).MinWidth(0).Clip().Children(func() {
-		if a.renaming == sp.ID {
-			a.renamePane(c, p)
+		if a.renaming == terminal {
+			a.renamePane(c, tab, terminal)
 		} else {
 			// The user drags the pane by its title, which shows as much
 			// as the pointer comes over it.
-			title := ui.Row(c.Key("title")).Bind(a.term.TitleHandle(sp.ID)).AlignItems(ui.Center).Gap(8).
-				Padding(3, 8).Radius(6).Shrink(1).MinWidth(0).Cursor(ui.CursorMove).
+			title := ui.Row(c.Key("title")).Bind(a.term.TitleHandle(terminal)).AlignItems(ui.Center).Gap(8).
+				Padding(3, 8).Radius(6).Shrink(1).MinWidth(0).Clip().Cursor(ui.CursorMove).
 				ContextMenu(func(m *ui.Menu) {
 					if m.Item("Rename").Chosen() {
-						a.renaming, a.newLabel = sp.ID, p.Label
+						if n := tab.Pane(terminal); n != nil {
+							a.renaming, a.newLabel = terminal, n.Name
+						}
 					}
 				})
 			grip := title.Hovered()
 			if grip {
 				title.Background(t.Text.Alpha(0.07))
 			}
-			title.Children(func() { a.paneTitle(c, sp, grip) })
+			title.Children(func() { a.paneTitle(c, terminal, focused, grip) })
 		}
 		ui.Spacer(c)
 		if !actions {
 			return
 		}
-		zoomed := false
-		for _, tab := range a.snap.Tabs {
-			if tab.ID == p.Tab {
-				zoomed = tab.Zoomed
-			}
-		}
 		zoomLabel, zoom := "Zoom", zoomIcon
-		if zoomed {
+		if tab.Zoomed {
 			zoomLabel, zoom = "Unzoom", unzoomIcon
 		}
 		ui.Row(c).Gap(2).Shrink(0).Children(func() {
 			if headerButton(c, "split-right", splitRightIcon, "Split Right") {
-				a.split(p.ID, "right")
+				a.split(terminal, layout.Right)
 			}
 			if headerButton(c, "split-down", splitDownIcon, "Split Down") {
-				a.split(p.ID, "down")
+				a.split(terminal, layout.Down)
 			}
 			if headerButton(c, "zoom", zoom, zoomLabel) {
-				a.request("pane.zoom", map[string]any{"pane_id": p.ID, "mode": "toggle"}, nil)
+				tab.Focus = terminal
+				a.toggleZoom()
 			}
 			if headerButton(c, "close", closeIcon, "Close Pane") {
-				a.request("pane.close", map[string]any{"pane_id": p.ID}, nil)
+				a.kill(terminal)
 			}
 		})
 	})
 }
 
-// snapPane returns what the snapshot says of a pane.
-func (a *app) snapPane(id string) endpoint.Pane {
-	for _, p := range a.snap.Panes {
-		if p.ID == id {
-			return p
-		}
+// toggleZoom shows the focused pane of the tab shown alone, or all its
+// panes again.
+func (a *app) toggleZoom() {
+	if _, tab := a.lay.ActiveTab(); tab != nil {
+		tab.Zoomed = !tab.Zoomed
+		a.term.Focus()
+		a.save()
 	}
-	return endpoint.Pane{}
 }
 
 // renamePane edits a pane's name in place of its title, which no longer
 // drags the pane meanwhile, so that a press in the field is the field's:
-// no name, its agent's or "shell" shows for it again.
-func (a *app) renamePane(c *ui.Context, p endpoint.Pane) {
+// no name, its agent's or its program's shows for it again.
+func (a *app) renamePane(c *ui.Context, tab *layout.Tab, terminal string) {
+	n := tab.Pane(terminal)
+	if n == nil {
+		return
+	}
 	ui.Row(c.Key("rename")).AlignItems(ui.Center).Padding(0, 0, 0, 8).Shrink(1).MinWidth(0).Children(func() {
-		a.renameField(c, "Pane Name", p.Label, func(name string) {
-			a.request("pane.rename", map[string]any{"pane_id": p.ID, "label": name}, nil)
-		}).Placeholder(a.paneName(p)).Width(240).MinWidth(0).Shrink(1).Height(24).Padding(0, 6)
+		a.renameField(c, "Pane Name", n.Name, func(name string) {
+			if n := tab.Pane(terminal); n != nil {
+				n.Name = name
+				a.save()
+			}
+		}).Placeholder(a.unnamedPane(terminal)).Width(240).MinWidth(0).Shrink(1).Height(24).Padding(0, 6)
 	})
 }
 
-// paneName is what a pane is called without a name of its own: its
-// agent, or "shell".
-func (a *app) paneName(p endpoint.Pane) string {
-	if agent, ok := a.agentIn(p.ID); ok && agent.Agent != "" {
-		return agent.Agent
+// unnamedPane is what a pane shows without a name of its own.
+func (a *app) unnamedPane(terminal string) string {
+	if _, ok := a.agent(terminal); ok {
+		return a.agentName(terminal)
+	}
+	if t, ok := a.terms.Find(terminal); ok && t.Foreground != nil && t.Foreground.Name != "" {
+		return t.Foreground.Name
 	}
 	return "shell"
 }
 
 // paneTitle shows what a pane runs, where, and on which branch, with the
 // mark of the agent, or a shell's; grip shows the mark of moving instead.
-func (a *app) paneTitle(c *ui.Context, sp endpoint.SurfacePane, grip bool) {
+func (a *app) paneTitle(c *ui.Context, terminal string, focused, grip bool) {
 	t := c.Theme()
-	p := a.snapPane(sp.ID)
-	agent, isAgent := a.agentIn(p.ID)
-	name, dir := cmp.Or(p.Label, a.paneName(p)), paneLabel(endpoint.Pane{Cwd: p.Cwd})
-	if mark, ok := agentIcons[agent.Agent]; ok && !grip {
+	status, isAgent := a.agent(terminal)
+	if icon, mark := a.itemIcon(terminal); mark != nil && !grip {
 		ui.Image(c, mark).Size(16, 16)
 	} else {
-		icon := shellIcon
 		if grip {
 			icon = moveIcon
 		}
 		ui.Icon(c, icon).Size(16, 16).TextColor(t.TextMuted)
 	}
-	title := ui.Text(c, name).Bold().SingleLine().Shrink(0)
-	if !sp.Focused {
+	title := ui.Text(c, a.paneName(terminal)).Bold().SingleLine().Shrink(0)
+	if !focused {
 		title.TextColor(t.TextMuted)
 	}
 	if isAgent {
-		statusDot(c, agent.Status)
+		statusDot(c, status.State)
 	}
-	ui.Text(c, dir).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
-	if branch := a.branchOf(p.Workspace); branch != "" {
+	ui.Text(c, a.dirOf(terminal)).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
+	if branch := a.branchOf(terminal); branch != "" {
 		ui.Icon(c, branchIcon).Size(14, 14).TextColor(t.TextMuted)
 		ui.Text(c, branch).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
 	}
-}
-
-// rearrange puts a pane the user dropped on another at side of it: in its
-// place, swapping them, or beside it. The server moves a pane beside
-// another only to another tab, so a new pane takes its place beside the
-// other, the pane swaps places with it, and it closes, leaving the pane
-// there; the requests go one after another.
-func (a *app) rearrange(paneID, targetID string, side term.Side) {
-	swap := func(source, target string) {
-		a.request("pane.swap", map[string]any{"source_pane_id": source, "target_pane_id": target}, nil)
-	}
-	if side == term.SideCenter {
-		swap(paneID, targetID)
-		return
-	}
-	direction := "right"
-	if side == term.SideTop || side == term.SideBottom {
-		direction = "down"
-	}
-	a.request("pane.split", map[string]any{"target_pane_id": targetID, "direction": direction}, func(result json.RawMessage, err error) {
-		var r struct {
-			Pane struct {
-				ID string `json:"pane_id"`
-			}
-		}
-		if err != nil || json.Unmarshal(result, &r) != nil || r.Pane.ID == "" {
-			return
-		}
-		if side == term.SideLeft || side == term.SideTop {
-			swap(targetID, r.Pane.ID)
-		}
-		swap(paneID, r.Pane.ID)
-		a.request("pane.close", map[string]any{"pane_id": r.Pane.ID}, nil)
-		a.focusPane(paneID)
-	})
 }
 
 // headerButton reports a click on an iconButton.
@@ -989,39 +880,10 @@ func iconButton(c *ui.Context, key string, icon *ui.SVG, label string) ui.Elemen
 	return b
 }
 
-// branchOf returns the Git branch of a workspace's checkout.
-func (a *app) branchOf(workspaceID string) string {
-	for _, ws := range a.snap.Workspaces {
-		if ws.ID == workspaceID {
-			return ws.Branch
-		}
-	}
-	return ""
-}
-
 // titleBand is the height of the band along the top of the window that the
 // window controls sit in, centered on the panes' headers along the top.
 func (a *app) titleBand(c *ui.Context) float32 {
 	return cmp.Or(c.TitleBar().Height, 2*a.term.HeaderCenter())
-}
-
-// agentIn returns the agent herdr recognizes in the pane, if any.
-func (a *app) agentIn(paneID string) (endpoint.Agent, bool) {
-	for _, ag := range a.snap.Agents {
-		if ag.Pane == paneID {
-			return ag, true
-		}
-	}
-	return endpoint.Agent{}, false
-}
-
-// paneLabel names a pane: the name it was given, else its directory.
-func paneLabel(p endpoint.Pane) string {
-	dir := p.Cwd
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, home) {
-		dir = "~" + strings.TrimPrefix(dir, home)
-	}
-	return cmp.Or(p.Label, dir, p.ID)
 }
 
 // statusDot shows an agent's state as a dot in a soft halo, as Coda's: a
@@ -1034,7 +896,7 @@ func statusDot(c *ui.Context, status string) {
 	switch status {
 	case "working":
 		color = t.Warning
-	case "blocked":
+	case "blocked", "error":
 		color = t.Danger
 	case "done":
 		color = t.Success
@@ -1082,190 +944,28 @@ func b2f(b bool) float32 {
 	return 0
 }
 
-// focusChosen asks the server to focus the tab, or agent's pane, the user
-// chose in the sidebar.
-func (a *app) focusChosen() {
-	if a.snapPane(a.chosen).ID != "" {
-		a.focusPane(a.chosen)
+// showChosen shows the tab, or agent's pane, the user chose in the
+// sidebar.
+func (a *app) showChosen() {
+	if _, t := a.lay.Tab(a.chosen); t != nil {
+		a.showTab(t.ID)
 		return
 	}
-	a.request("tab.focus", map[string]string{"tab_id": a.chosen}, nil)
-}
-
-// split splits a pane, the new one, focused, going right of it or below
-// it as direction is "right" or "down".
-func (a *app) split(paneID, direction string) {
-	a.request("pane.split", map[string]any{"target_pane_id": paneID, "direction": direction, "focus": true}, nil)
+	if _, ok := a.terms.Find(a.chosen); ok {
+		a.showTerminal(a.chosen)
+	}
 }
 
 // splitFocused splits the focused pane of the tab shown.
-func (a *app) splitFocused(direction string) {
-	if p, ok := a.focusedPane(); ok {
-		a.split(p.ID, direction)
-	}
-}
-
-// focusedPane returns the focused pane of the tab shown.
-func (a *app) focusedPane() (endpoint.SurfacePane, bool) {
-	if a.surface != nil {
-		for _, p := range a.surface.Panes {
-			if p.Focused {
-				return p, true
-			}
-		}
-	}
-	return endpoint.SurfacePane{}, false
-}
-
-func (a *app) focusPane(id string) { a.request("pane.focus", map[string]string{"pane_id": id}, nil) }
-
-// request sends a request of herdr's API for the client's view.
-// request asks the server for method; done, if any, gets the result of
-// the response, or why there is none.
-func (a *app) request(method string, params any, done func(result json.RawMessage, err error)) {
-	if done == nil {
-		done = func(json.RawMessage, error) {}
-	}
-	if a.conn == nil {
-		done(nil, errors.New("not connected"))
-		return
-	}
-	a.queue = append(a.queue, &reply{method: method, params: params, done: done})
-	a.send()
-}
-
-// send sends the first request waiting, once the endpoint has answered the
-// one before.
-func (a *app) send() {
-	for a.sent == nil && len(a.queue) > 0 && a.conn != nil {
-		r := a.queue[0]
-		a.queue = a.queue[1:]
-		id, err := a.conn.Request(a.snap.BootID, r.method, r.params)
-		if err != nil {
-			r.done(nil, err)
-			continue
-		}
-		r.id, a.sent = id, r
-	}
-}
-
-// answer hands a reply's response to it once its last chunk comes.
-func (a *app) answer(c endpoint.ResponseChunk) {
-	r := a.sent
-	if r == nil || r.id != c.RequestID {
-		return
-	}
-	r.data = append(r.data, c.Data...)
-	if !c.Final {
-		return
-	}
-	a.sent = nil
-	defer a.send()
-	var resp struct {
-		Result json.RawMessage
-		Error  *struct{ Code, Message string }
-	}
-	switch err := json.Unmarshal(r.data, &resp); {
-	case err != nil:
-		r.done(nil, err)
-	case resp.Error != nil:
-		r.done(nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message))
-	default:
-		r.done(resp.Result, nil)
-	}
-}
-
-// connect keeps a connection to the endpoint, connecting again a second
-// after one fails or ends.
-func (a *app) connect(win *mygo.Window) {
-	for {
-		// The view asks for its own size once it has the connection.
-		conn, err := endpoint.Dial(a.socket, endpoint.Size{Cols: 80, Rows: 24, CellWidth: 8, CellHeight: 16})
-		if err == nil {
-			win.Update(func() {
-				a.conn, a.err, a.serverDown, a.starting, a.serverErr = conn, "", false, false, ""
-				a.term.Reconnected()
-			})
-			err = a.read(win, conn)
-			conn.Close()
-		} else if server.NotRunning(err) {
-			// What the server showed went with it.
-			win.Update(func() { a.serverDown, a.snap = true, endpoint.Snapshot{} })
-		}
-		msg := err.Error()
-		// The requests the connection took get no response.
-		win.Update(func() { a.conn, a.surface, a.err, a.queue, a.sent = nil, nil, msg, nil, nil })
-		time.Sleep(time.Second)
-	}
-}
-
-// read queues the connection's messages for the main thread until it
-// ends. A burst of output comes as many patches: one update takes them all.
-func (a *app) read(win *mygo.Window, conn *endpoint.Conn) error {
-	for {
-		msg, err := conn.Next()
-		if err != nil {
-			return err
-		}
-		a.mu.Lock()
-		a.inbox = append(a.inbox, msg)
-		first := len(a.inbox) == 1
-		a.mu.Unlock()
-		if first {
-			win.Update(a.receive)
-		}
-	}
-}
-
-// receive takes the messages the connection queued, on the main thread.
-func (a *app) receive() {
-	a.mu.Lock()
-	msgs := a.inbox
-	a.inbox = nil
-	a.mu.Unlock()
-	for _, msg := range msgs {
-		switch m := msg.(type) {
-		case *endpoint.Snapshot:
-			a.snap, a.chosen = *m, m.FocusedTab
-			if m.FocusedTab != "" {
-				if a.tabFocus == nil {
-					a.tabFocus = map[string]string{}
-				}
-				a.tabFocus[m.FocusedTab] = m.FocusedPane
-			}
-		case *endpoint.Surface:
-			a.surface = m
-		case *endpoint.SurfacePatch:
-			if a.surface == nil || a.surface.Apply(m) != nil {
-				// Out of step with the server: a new connection starts
-				// from a whole surface.
-				if a.conn != nil {
-					a.conn.Close()
-				}
-				return
-			}
-		case endpoint.Clipboard:
-			a.services.WriteClipboard(m.Text)
-		case endpoint.ResponseChunk:
-			a.answer(m)
-		case endpoint.ShellError:
-			a.err = m.Message
-		}
+func (a *app) splitFocused(d layout.Direction) {
+	if t := a.focusedTerminal(); t != "" {
+		a.split(t, d)
 	}
 }
 
 func main() {
-	// Started from a herdr pane, as during development, the app inherits
-	// the pane's HERDR_SOCKET_PATH, which would win over HERDR_SESSION.
-	if os.Getenv("HERDR_ENV") == "1" {
-		os.Unsetenv("HERDR_SOCKET_PATH")
-	}
-	socket, err := endpoint.DefaultSocketPath()
-	if err != nil {
-		log.Fatal(err)
-	}
-	a := &app{socket: socket, sidebarWidth: 240, settings: loadSettings()}
-	a.term = term.New(a.settings.terminalFont())
+	a := &app{sidebarWidth: 240, settings: loadSettings()}
+	a.term = term.New(a.settings.terminalFont(), lightTerminal, darkTerminal)
 	// Only macOS: elsewhere the menu would add a bar to the window, and the
 	// view takes the File menu's keys.
 	if runtime.GOOS == "darwin" {
@@ -1273,7 +973,6 @@ func main() {
 	}
 	// The app starts in the appearance the user chose.
 	mygo.Theme.SetSource(a.settings.Appearance)
-	a.term.SetThemes(lightTerminal, darkTerminal)
 	center := a.term.HeaderCenter()
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
@@ -1294,8 +993,8 @@ func main() {
 			TitleBarHeight:       int(math.Round(float64(2 * center))),
 			Content:              ui.View(a.view),
 		})
-		a.win = win
-		go a.connect(win)
+		a.win, a.post = win, win.Update
+		go a.connect()
 		// The settings offer the font families, after the choices for none
 		// of the user's; listing them takes a while with many fonts
 		// installed.
@@ -1307,7 +1006,7 @@ func main() {
 					mono = append(mono, f.Name)
 				}
 			}
-			win.Update(func() { a.monoFonts, a.allFonts = mono, all })
+			a.update(func() { a.monoFonts, a.allFonts = mono, all })
 		}()
 	})
 	if err := mygo.App.Run(); err != nil {

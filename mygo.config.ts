@@ -11,6 +11,8 @@ export default {
   main: "./cmd/mux",
   out: "build",
   macos: {
+    // libghostty-vt, which the terminals run on, runs on macOS 13 or later.
+    minimumSystemVersion: "13.0",
     infoPlist: { CFBundleVersion: commit },
   },
 };

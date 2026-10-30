@@ -13,7 +13,10 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
+
+	"mux/internal/hc"
 )
 
 // settings are what the user set in the settings dialog, kept in the app's
@@ -28,9 +31,9 @@ type settings struct {
 	FallbackFont string `json:"fallback_font,omitempty"`
 	// FontSize is the terminals' font size, 0 for the default.
 	FontSize float64 `json:"font_size,omitempty"`
-	// FontSmoothing draws the terminals' text with macOS's font smoothing,
-	// heavier, as most Mac apps draw theirs; without it, as Ghostty does
-	// by default.
+	// FontSmoothing draws the terminals' text thicker, with macOS's font
+	// smoothing at its strongest, as Ghostty's font-thicken; without it,
+	// as Ghostty does by default.
 	FontSmoothing bool `json:"font_smoothing,omitempty"`
 }
 
@@ -49,12 +52,18 @@ const (
 
 // terminalFont is the terminals' font: the fallback family, if any, fills
 // in the glyphs the first lacks, before the system's fallback fonts.
-func (s settings) terminalFont() ui.Font {
+func (s settings) terminalFont() terminal.Font {
 	families := cmp.Or(s.TerminalFont, "monospace")
 	if s.FallbackFont != "" {
 		families += ", " + s.FallbackFont
 	}
-	return ui.Font{Family: families, Size: float32(cmp.Or(s.FontSize, defaultFontSize)), Antialiased: !s.FontSmoothing}
+	return terminal.Font{Family: families, Size: float32(cmp.Or(s.FontSize, defaultFontSize)), Thicken: s.FontSmoothing}
+}
+
+// previewFont is the terminals' font as the settings' preview draws it.
+func (s settings) previewFont() ui.Font {
+	f := s.terminalFont()
+	return ui.Font{Family: f.Family, Size: f.Size, Antialiased: !f.Thicken}
 }
 
 // appearances are the choices of the dialog's appearance control, in order.
@@ -228,15 +237,15 @@ func settingsRow(c *ui.Context, label, description string, control func()) {
 	})
 }
 
-// serverSettings shows whether the herdr server runs, with a button
-// starting or stopping it, and where the app finds it.
+// serverSettings shows whether herdr-core runs, with a button starting or
+// stopping it, and where the app finds it.
 func (a *app) serverSettings(c *ui.Context) {
 	t := c.Theme()
 	settingsCard(c, func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(t.Space(3)).Padding(t.Space(2.5), 0).Children(func() {
 			serverMark(c, 40)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(t.Space(0.5)).Children(func() {
-				ui.Text(c, "herdr server").Bold()
+				ui.Text(c, "herdr-core").Bold()
 				ui.Text(c, a.serverStatus()).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
 			})
 			a.serverButton(c)
@@ -246,8 +255,12 @@ func (a *app) serverSettings(c *ui.Context) {
 		ui.Text(c, a.serverErr).FontSize(12).TextColor(t.Danger)
 	}
 	settingsCard(c, func() {
-		settingsRow(c, "Socket", "Where the app connects to the server.", func() {})
-		ui.Text(c, a.socket).FontSize(t.FontSize-1).TextColor(t.TextMuted).Selectable().Padding(0, 0, t.Space(2.5), 0)
+		settingsRow(c, "Command", "The hc the app runs to connect to the core.", func() {})
+		bin := a.bin
+		if bin == "" {
+			bin = "Not found. Install it with: " + hc.InstallCommand
+		}
+		ui.Text(c, bin).FontSize(t.FontSize-1).TextColor(t.TextMuted).Selectable().Padding(0, 0, t.Space(2.5), 0)
 	})
 }
 
@@ -323,8 +336,8 @@ func (a *app) terminalSettings(c *ui.Context) {
 		// Font smoothing is macOS's; elsewhere the switch would change nothing.
 		if runtime.GOOS == "darwin" {
 			ui.Divider(c)
-			settingsRow(c, "Font Smoothing", "Draws text heavier, as most Mac apps do.", func() {
-				ui.Switch(c.Key("font-smoothing"), &a.settings.FontSmoothing).Label("Font Smoothing").
+			settingsRow(c, "Thicken Text", "Draws text heavier, as Ghostty’s font-thicken does.", func() {
+				ui.Switch(c.Key("font-smoothing"), &a.settings.FontSmoothing).Label("Thicken Text").
 					OnChange(a.applyFont)
 			})
 		}
@@ -347,7 +360,7 @@ var previewText = [][]previewRun{
 		{"🐹 v1.27.1", 6, true}, {" via ", -1, false}, {"\ue718 v22.21.1", 2, true}},
 	{{"➜ ", 2, true}, {"go test ./...", -1, false}},
 	{{"ok      mux/cmd/mux     0.387s", -1, false}},
-	{{"ok      mux/internal/herdr/endpoint     (cached)", -1, false}},
+	{{"ok      mux/internal/hc     (cached)", -1, false}},
 	{{"ok      mux/internal/term       0.412s", -1, false}},
 }
 
@@ -356,7 +369,7 @@ var previewText = [][]previewRun{
 // as the font changes.
 func (a *app) fontPreview(c *ui.Context) {
 	th := c.Theme()
-	font := a.settings.terminalFont()
+	font := a.settings.previewFont()
 	if a.previewGlyphs == nil || a.previewFont != font {
 		a.previewFont = font
 		a.previewGlyphs = make([][][]ui.Glyph, len(previewText))

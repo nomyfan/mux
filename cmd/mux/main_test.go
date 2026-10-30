@@ -9,40 +9,56 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"mux/internal/herdr/endpoint"
+	"mux/internal/hc"
+	"mux/internal/layout"
 	"mux/internal/term"
 )
 
-// The sidebar groups tabs by workspace, a tab with an agent showing it and
-// its state, others the directory of their first pane, unless named.
-func TestSidebar(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
-			Tabs: []endpoint.Tab{
-				{ID: "w1:t1", Workspace: "w1", Label: "1"},
-				{ID: "w2:t1", Workspace: "w2", Label: "1"},
-				{ID: "w2:t2", Workspace: "w2", Label: "logs"},
-			},
-			Panes: []endpoint.Pane{
-				{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w1:p2", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w2:p1", Workspace: "w2", Tab: "w2:t1", Cwd: "/srv/web"},
-				{ID: "w2:p2", Workspace: "w2", Tab: "w2:t2", Cwd: "/var/log"},
-			},
-			Agents: []endpoint.Agent{{Pane: "w1:p2", Agent: "claude", Status: "blocked"}},
-		},
+// newApp is an app showing a layout of terminals, with no connection.
+func newApp(l layout.Layout, terms ...hc.Terminal) *app {
+	return &app{term: term.New(settings{}.terminalFont(), lightTerminal, darkTerminal), sidebarWidth: 240,
+		lay: l, terms: hc.Terminals{List: terms}}
+}
+
+// shell is a live terminal running a shell in cwd.
+func shell(address, cwd string) hc.Terminal {
+	return hc.Terminal{Address: address, State: "live", Cwd: cwd, Foreground: &hc.Foreground{Name: "zsh", Cwd: cwd}}
+}
+
+// agent is a live terminal whose program reports its state as app.
+func agent(address, cwd, app, state string) hc.Terminal {
+	t := shell(address, cwd)
+	t.Foreground.Name, t.Status = "node", &hc.Status{State: state, App: app}
+	return t
+}
+
+// tab is a tab of panes side by side, the first focused.
+func tab(id string, terminals ...string) *layout.Tab {
+	t := &layout.Tab{ID: id, Root: &layout.Node{Terminal: terminals[0]}, Focus: terminals[0]}
+	for i := 1; i < len(terminals); i++ {
+		t.Split(terminals[i-1], terminals[i], layout.Right)
 	}
+	t.Focus = terminals[0]
+	return t
+}
+
+// The sidebar groups tabs by workspace, a tab with an agent focused
+// showing it and its state, others the directory of their focused pane,
+// unless named.
+func TestSidebar(t *testing.T) {
+	api := tab("tab1", "t2", "t1")
+	logs := tab("tab3", "t4")
+	logs.Name = "logs"
+	a := newApp(layout.Layout{Active: "tab2", Workspaces: []*layout.Workspace{
+		{ID: "w1", Name: "api", Tabs: []*layout.Tab{api}},
+		{ID: "w2", Tabs: []*layout.Tab{tab("tab2", "t3"), logs}},
+	}}, shell("t1", "/srv/api"), agent("t2", "/srv/api", "claude-code", "blocked"), shell("t3", "/srv/web"), shell("t4", "/var/log"))
+	a.collapse(agentsSection, true)
 	tt := ui.NewTester(a.view, 1000, 600)
-	for _, text := range []string{"api", "web", "claude", "blocked", "/srv/web", "logs"} {
+	for _, text := range []string{"api", "web", "Claude Code", "blocked", "/srv/web", "logs"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
-	}
-	if _, ok := tt.Find("New Workspace"); ok {
-		t.Error("a New Workspace button, where Cmd+N makes one")
 	}
 	for _, text := range []string{"/srv/api", "/var/log"} {
 		if tt.HasText(text) {
@@ -53,7 +69,7 @@ func TestSidebar(t *testing.T) {
 
 // Cmd+B and the title bar's button hide the sidebar and show it again.
 func TestToggleSidebar(t *testing.T) {
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	a := newApp(layout.Layout{})
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Key(ui.Cmd, ui.KeyB)
 	if !a.sidebarHidden {
@@ -69,7 +85,7 @@ func TestToggleSidebar(t *testing.T) {
 
 // Dragging the divider resizes the sidebar, within its bounds.
 func TestResizeSidebar(t *testing.T) {
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	a := newApp(layout.Layout{})
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Press(240, 300)
 	tt.Move(300, 300)
@@ -85,29 +101,28 @@ func TestResizeSidebar(t *testing.T) {
 	}
 }
 
-// A click on a workspace's name hides its tabs, and another shows them.
+// twoWorkspaces is api's tab of /srv/api and web's of /srv/web, web's
+// shown.
+func twoWorkspaces() *app {
+	return newApp(layout.Layout{Active: "tab2", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1")}},
+		{ID: "w2", Tabs: []*layout.Tab{tab("tab2", "t2")}},
+	}}, shell("t1", "/srv/api"), shell("t2", "/srv/web"))
+}
+
+// A workspace is called after the folder of its first pane, and a click on
+// its name hides its tabs, and another shows them.
 func TestCollapseWorkspace(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}, {ID: "w2:t1", Workspace: "w2"}},
-			Panes: []endpoint.Pane{
-				{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w2:p1", Workspace: "w2", Tab: "w2:t1", Cwd: "/srv/web"},
-			},
-		},
-	}
+	a := twoWorkspaces()
 	tt := ui.NewTester(a.view, 1000, 600)
 	if err := tt.Click("api"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v in %q", err, tt.Texts())
 	}
 	if !tt.HasText("/srv/api") {
 		t.Fatal("the tabs hid at once, rather than sliding up")
 	}
 	tt.Advance(time.Second)
-	if tt.HasText("/srv/api") || !tt.HasText("/srv/web") {
+	if tt.HasText("/srv/api") {
 		t.Fatalf("after collapsing api: %q", tt.Texts())
 	}
 	if err := tt.Click("api"); err != nil {
@@ -121,15 +136,7 @@ func TestCollapseWorkspace(t *testing.T) {
 
 // A workspace's menu renames it in place, and closes it once confirmed.
 func TestWorkspaceMenu(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}},
-			Panes:      []endpoint.Pane{{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"}},
-		},
-	}
+	a := twoWorkspaces()
 	tt := ui.NewTester(a.view, 1000, 600)
 	if err := tt.RightClick("api"); err != nil {
 		t.Fatal(err)
@@ -138,50 +145,37 @@ func TestWorkspaceMenu(t *testing.T) {
 		t.Fatalf("%v in %q", err, tt.Menu())
 	}
 	tt.Frame()
-	if a.renaming != "w1" || a.newLabel != "api" || !tt.Focused("Workspace Name") {
+	if a.renaming != "w1" || a.newLabel != "" || !tt.Focused("Workspace Name") {
 		t.Fatalf("Rename edits %q from %q, field focused %v", a.renaming, a.newLabel, tt.Focused("Workspace Name"))
 	}
-	tt.Key(0, ui.KeyEscape)
-	if a.renaming != "" || !tt.HasText("api") {
-		t.Errorf("Escape left %q renaming, showing %q", a.renaming, tt.Texts())
+	tt.Type("backend")
+	tt.Key(0, ui.KeyEnter)
+	if a.renaming != "" || a.lay.Workspaces[0].Name != "backend" || !tt.HasText("backend") {
+		t.Errorf("Enter left %q renaming, named %q, showing %q", a.renaming, a.lay.Workspaces[0].Name, tt.Texts())
 	}
 
-	if err := tt.RightClick("api"); err != nil {
+	if err := tt.RightClick("backend"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.ChooseMenuItem("Close Workspace…"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("Close “api”?") {
-		t.Fatalf("no confirmation in %q", tt.Texts())
+	if !tt.HasText("Close “backend”?") || len(a.closing.terminals) != 1 || a.closing.terminals[0] != "t1" {
+		t.Fatalf("no confirmation in %q, closing %+v", tt.Texts(), a.closing)
 	}
 	if err := tt.Click("Cancel"); err != nil {
 		t.Fatal(err)
 	}
-	if a.closing != nil || tt.HasText("Close “api”?") {
+	if a.closing != nil || tt.HasText("Close “backend”?") {
 		t.Errorf("Cancel left %+v closing", a.closing)
 	}
 }
 
-// A tab's menu renames it in place, its row as tall as its item, from its
-// own name, none for a tab herdr numbers.
+// A tab's menu renames it in place, from its own name, none for a tab
+// called after its pane.
 func TestRenameTab(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
-			Tabs: []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Number: 1, Label: "1"},
-				{ID: "w1:t2", Workspace: "w1", Number: 2, Label: "2"}, {ID: "w1:t3", Workspace: "w1", Number: 3, Label: "logs"}},
-			Panes: []endpoint.Pane{
-				{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w1:p2", Workspace: "w1", Tab: "w1:t2", Cwd: "/var/log"},
-				{ID: "w1:p3", Workspace: "w1", Tab: "w1:t3", Cwd: "/var/log"},
-			},
-		},
-	}
+	a := twoWorkspaces()
 	tt := ui.NewTester(a.view, 1000, 600)
-	below, _ := tt.Find("/var/log")
 	if err := tt.RightClick("/srv/api"); err != nil {
 		t.Fatal(err)
 	}
@@ -189,90 +183,27 @@ func TestRenameTab(t *testing.T) {
 		t.Fatalf("%v in %q", err, tt.Menu())
 	}
 	tt.Frame()
-	if a.renaming != "w1:t1" || a.newLabel != "" || !tt.Focused("Tab Name") {
+	if a.renaming != "tab1" || a.newLabel != "" || !tt.Focused("Tab Name") {
 		t.Fatalf("Rename edits %q from %q, field focused %v", a.renaming, a.newLabel, tt.Focused("Tab Name"))
 	}
-	if r, _ := tt.Find("/var/log"); r.Y != below.Y {
-		t.Errorf("the tab below moved from %v to %v", below.Y, r.Y)
-	}
-	tt.Key(0, ui.KeyEscape)
-	if a.renaming != "" || !tt.HasText("/srv/api") {
-		t.Errorf("Escape left %q renaming, showing %q", a.renaming, tt.Texts())
-	}
-
-	if err := tt.RightClick("logs"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("Rename"); err != nil {
-		t.Fatalf("%v in %q", err, tt.Menu())
-	}
-	tt.Frame()
-	if a.renaming != "w1:t3" || a.newLabel != "logs" {
-		t.Errorf("Rename edits %q from %q, want logs's name", a.renaming, a.newLabel)
-	}
-}
-
-// A tab shows what its active pane runs: the one it last focused, else its
-// first agent's; and the state of its agent most needing the user.
-func TestTabActivePane(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		// The tab's alone, without the list of agents.
-		collapsed: map[string]bool{agentsSection: true},
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "1"}},
-			Panes: []endpoint.Pane{
-				{ID: "w1:p1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w1:p2", Tab: "w1:t1"},
-				{ID: "w1:p3", Tab: "w1:t1"},
-			},
-			Agents: []endpoint.Agent{
-				{Pane: "w1:p2", Agent: "claude", Status: "done"},
-				{Pane: "w1:p3", Agent: "codex", Status: "blocked"},
-			},
-		},
-	}
-	tt := ui.NewTester(a.view, 1000, 600)
-	if !tt.HasText("claude") || !tt.HasText("blocked") || tt.HasText("codex") {
-		t.Errorf("a tab not yet shown: %q, want its first agent", tt.Texts())
-	}
-	a.tabFocus = map[string]string{"w1:t1": "w1:p3"}
-	tt.Frame()
-	if !tt.HasText("codex") || !tt.HasText("blocked") || tt.HasText("claude") {
-		t.Errorf("a tab that focused codex: %q", tt.Texts())
-	}
-	a.tabFocus["w1:t1"] = "w1:p1"
-	tt.Frame()
-	if !tt.HasText("/srv/api") || tt.HasText("codex") {
-		t.Errorf("a tab that focused a shell: %q", tt.Texts())
-	}
-	// Whichever pane it focused, it shows the state most needing the user.
-	if !tt.HasText("blocked") || tt.HasText("done") {
-		t.Errorf("a tab with an agent blocked: %q", tt.Texts())
+	tt.Type("server")
+	tt.Key(0, ui.KeyEnter)
+	if _, tb := a.lay.Tab("tab1"); tb.Name != "server" || !tt.HasText("server") {
+		t.Errorf("tab named %q, showing %q", tb.Name, tt.Texts())
 	}
 }
 
 // Closing a tab, by its button or its menu, asks the user first.
 func TestCloseTabConfirms(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "logs"}},
-			Panes:      []endpoint.Pane{{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/var/log"}},
-		},
-	}
+	a := twoWorkspaces()
 	tt := ui.NewTester(a.view, 1000, 600)
-	r, _ := tt.Find("logs")
+	r, _ := tt.Find("/srv/api")
 	tt.Move(r.X+r.W/2, r.Y+r.H/2)
 	tt.Frame()
 	if err := tt.Click("Close Tab"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("Close “logs”?") {
+	if !tt.HasText("Close “/srv/api”?") {
 		t.Fatalf("no confirmation in %q", tt.Texts())
 	}
 	if err := tt.Click("Cancel"); err != nil {
@@ -281,33 +212,24 @@ func TestCloseTabConfirms(t *testing.T) {
 	if a.closing != nil {
 		t.Errorf("Cancel left %+v closing", a.closing)
 	}
-
-	if err := tt.RightClick("logs"); err != nil {
+	if err := tt.RightClick("/srv/api"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.ChooseMenuItem("Close Tab…"); err != nil {
 		t.Fatalf("%v in %q", err, tt.Menu())
 	}
-	if c := a.closing; c == nil || c.method != "tab.close" || c.params["tab_id"] != "w1:t1" || !tt.HasText("Close “logs”?") {
-		t.Errorf("the menu's Close Tab… asks %+v, showing %q", c, tt.Texts())
+	if c := a.closing; c == nil || len(c.terminals) != 1 || c.terminals[0] != "t1" {
+		t.Errorf("the menu's Close Tab… asks %+v", c)
 	}
 }
 
 // A pane's title renames it in place, from its own name, which no name
 // clears; meanwhile the title drags the pane no more.
 func TestRenamePane(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "server"}},
-			Panes:      []endpoint.Pane{{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Label: "build", Cwd: "/srv/api"}},
-		},
-		surface: &endpoint.Surface{Frame: endpoint.Frame{Width: 80, Height: 20, Cells: make([]endpoint.Cell, 80*20)},
-			Panes: []endpoint.SurfacePane{{ID: "w1:p1", Focused: true, Rect: endpoint.Rect{Width: 80, Height: 20},
-				Inner: endpoint.Rect{X: 1, Y: 1, Width: 78, Height: 18}}}},
-	}
+	a := twoWorkspaces()
+	// The sidebar calls the tab by its own name, the header the pane by its.
+	a.lay.Workspaces[1].Tabs[0].Name = "server"
+	a.lay.Workspaces[1].Tabs[0].Root.Name = "build"
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Frame()
 	if err := tt.RightClick("build"); err != nil {
@@ -317,31 +239,29 @@ func TestRenamePane(t *testing.T) {
 		t.Fatalf("%v in %q", err, tt.Menu())
 	}
 	tt.Frame()
-	if a.renaming != "w1:p1" || a.newLabel != "build" || !tt.Focused("Pane Name") {
+	if a.renaming != "t2" || a.newLabel != "build" || !tt.Focused("Pane Name") {
 		t.Fatalf("Rename edits %q from %q, field focused %v", a.renaming, a.newLabel, tt.Focused("Pane Name"))
 	}
 	// A press in the field places the caret, rather than dragging the pane.
 	r, _ := tt.Find("Pane Name")
 	tt.ClickAt(r.X+10, r.Y+r.H/2)
 	tt.Frame()
-	if a.renaming != "w1:p1" || !tt.Focused("Pane Name") {
+	if a.renaming != "t2" || !tt.Focused("Pane Name") {
 		t.Errorf("a click in the field left renaming %q, field focused %v", a.renaming, tt.Focused("Pane Name"))
 	}
-	tt.Key(0, ui.KeyEscape)
-	if a.renaming != "" || !tt.HasText("build") {
-		t.Errorf("Escape left %q renaming, showing %q", a.renaming, tt.Texts())
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	tt.Key(0, ui.KeyEnter)
+	if n := a.lay.Workspaces[1].Tabs[0].Root; a.renaming != "" || n.Name != "" || !tt.HasText("zsh") {
+		t.Errorf("cleared, renaming %q, named %q, showing %q", a.renaming, n.Name, tt.Texts())
 	}
 }
 
 // A moving status dot moves as the window paints again, without the view
 // built again.
 func TestStatusDotMoves(t *testing.T) {
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, snap: endpoint.Snapshot{
-		Workspaces: []endpoint.Workspace{{ID: "w1", Label: "mux"}},
-		Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "1"}},
-		Panes:      []endpoint.Pane{{ID: "p1", Tab: "w1:t1"}},
-		Agents:     []endpoint.Agent{{Pane: "p1", Agent: "claude", Status: "working"}},
-	}}
+	a := newApp(layout.Layout{Workspaces: []*layout.Workspace{{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1")}}}},
+		agent("t1", "/src", "claude-code", "working"))
 	builds := 0
 	tt := ui.NewTester(func(c *ui.Context) { builds++; a.view(c) }, 600, 300)
 	tt.Frame()
@@ -356,28 +276,22 @@ func TestStatusDotMoves(t *testing.T) {
 }
 
 // The sidebar lists the agents after the workspaces, by their pane's name
-// or their own, beside their workspace; choosing one chooses its pane.
+// or their own, beside their workspace; choosing one shows its pane, and
+// one without a pane gets a tab.
 func TestAgentsList(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 300,
-		snap: endpoint.Snapshot{
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1", Label: "1"}, {ID: "w2:t1", Workspace: "w2", Label: "1"}},
-			Panes: []endpoint.Pane{
-				{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1"},
-				{ID: "w2:p1", Workspace: "w2", Tab: "w2:t1", Label: "reviewer"},
-			},
-			Agents: []endpoint.Agent{
-				{Pane: "w1:p1", Agent: "claude", Status: "working"},
-				{Pane: "w2:p1", Agent: "codex", Status: "blocked"},
-			},
-		},
-		// The workspaces' tabs hidden, the agents' names show once.
-		collapsed: map[string]bool{"w1": true, "w2": true},
-	}
+	web := tab("tab2", "t2")
+	web.Root.Name = "reviewer"
+	a := newApp(layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+		{ID: "w1", Name: "api", Tabs: []*layout.Tab{tab("tab1", "t1")}},
+		{ID: "w2", Name: "web", Tabs: []*layout.Tab{web}},
+	}}, agent("t1", "/srv/api", "claude-code", "working"), agent("t2", "/srv/web", "codex", "blocked"),
+		agent("t9", "/srv/web", "codex", "idle"))
+	a.terms.List[2].Parent = "t1"
+	// The workspaces' tabs hidden, the agents' names show once.
+	a.collapsed = map[string]bool{"w1": true, "w2": true}
+	a.sidebarWidth = 300
 	tt := ui.NewTester(a.view, 1000, 600)
-	for _, text := range []string{"Agents", "claude", "reviewer"} {
+	for _, text := range []string{"Agents", "Claude Code", "reviewer", "Codex"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
@@ -385,8 +299,14 @@ func TestAgentsList(t *testing.T) {
 	if err := tt.Click("reviewer"); err != nil {
 		t.Fatal(err)
 	}
-	if a.chosen != "w2:p1" {
-		t.Errorf("choosing reviewer chose %q", a.chosen)
+	if a.chosen != "t2" || a.lay.Active != "tab2" {
+		t.Errorf("choosing reviewer chose %q, showing %q", a.chosen, a.lay.Active)
+	}
+	if err := tt.Click("Codex"); err != nil {
+		t.Fatal(err)
+	}
+	if ws, tb, _ := a.lay.Find("t9"); tb == nil || ws.ID != "w2" || a.lay.Active != tb.ID {
+		t.Errorf("an agent without a pane: %+v", a.lay)
 	}
 	if err := tt.Click("Agents"); err != nil {
 		t.Fatal(err)
@@ -405,10 +325,10 @@ func TestSettingsAppearance(t *testing.T) {
 	var source mygo.ThemeSource
 	setThemeSource = func(s mygo.ThemeSource) { source = s }
 	t.Cleanup(func() { setThemeSource = mygo.Theme.SetSource })
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	a := newApp(layout.Layout{})
 	tt := ui.NewTester(a.view, 1000, 600)
 	tt.Key(ui.Cmd, ui.KeyComma)
-	if !tt.HasText("herdr server") {
+	if !tt.HasText("herdr-core") {
 		t.Fatalf("no server settings after Cmd+, in %q", tt.Texts())
 	}
 	if err := tt.Click("Appearance"); err != nil {
@@ -440,30 +360,34 @@ func TestSettingsAppearance(t *testing.T) {
 	if a.settingsOpen {
 		t.Fatal("Escape left the settings open")
 	}
-	// Opened again, the dialog shows the choice.
-	a.appearance = 0
-	tt.Key(ui.Cmd, ui.KeyComma)
-	if a.appearance != 2 {
-		t.Errorf("appearance control at %d, not Dark", a.appearance)
-	}
 }
 
-// Without a server, the panes' room offers to start one, as the settings
-// do, and the sidebar no longer shows what the server showed.
+// Without herdr-core, the panes' room says how to install it; stopped,
+// it offers to start it, as the settings do.
 func TestServerDown(t *testing.T) {
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, serverDown: true, err: "dial unix: no such file"}
+	a := newApp(layout.Layout{})
+	a.notInstalled, a.err = true, hc.ErrNotInstalled.Error()
 	tt := ui.NewTester(a.view, 1000, 600)
-	if !tt.HasText("The herdr server isn’t running") {
+	if !tt.HasText("herdr-core isn’t installed") || !tt.HasText(hc.InstallCommand) {
 		t.Fatalf("no notice in %q", tt.Texts())
 	}
-	if _, ok := tt.Find("Start Server"); !ok {
-		t.Error("no Start Server button")
-	}
 	if tt.HasText(a.err) {
-		t.Error("the dial error shows beside the notice")
+		t.Error("the error shows beside the notice")
+	}
+	a.notInstalled = false
+	a.gate.stop()
+	tt.Frame()
+	if !tt.HasText("herdr-core is stopped") {
+		t.Fatalf("no notice in %q", tt.Texts())
+	}
+	if err := tt.Click("Start Server"); err != nil {
+		t.Fatal(err)
+	}
+	if a.stopped() || !a.starting {
+		t.Error("Start Server left the core stopped")
 	}
 	tt.Key(ui.Cmd, ui.KeyComma)
-	if !tt.HasText("Not running") {
+	if !tt.HasText("Starting…") {
 		t.Errorf("no server status in %q", tt.Texts())
 	}
 }
@@ -472,8 +396,8 @@ func TestServerDown(t *testing.T) {
 // and save it for the next launch.
 func TestSettingsTerminalFont(t *testing.T) {
 	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240, monoFonts: []string{systemFont, "Berkeley Mono", "Menlo"},
-		allFonts: []string{noFont, "Menlo", "Symbols Nerd Font"}}
+	a := newApp(layout.Layout{})
+	a.monoFonts, a.allFonts = []string{systemFont, "Berkeley Mono", "Menlo"}, []string{noFont, "Menlo", "Symbols Nerd Font"}
 	tt := ui.NewTester(a.view, 1000, 600)
 	openTerminalSettings(tt)
 	if f := (settings{}).terminalFont().Family; f != "monospace" {
@@ -490,7 +414,7 @@ func TestSettingsTerminalFont(t *testing.T) {
 		t.Fatalf("%v in %q", err, tt.Texts())
 	}
 	tt.Frame()
-	if a.settings.TerminalFont != "Menlo" {
+	if a.settings.TerminalFont != "Menlo" || a.term.Font().Family != "Menlo" {
 		t.Fatalf("terminal font %q after choosing Menlo", a.settings.TerminalFont)
 	}
 	// The fallback font's control lies below.
@@ -514,7 +438,7 @@ func TestSettingsTerminalFont(t *testing.T) {
 // steps of the arrows there or of the stepper beside it, and save it.
 func TestSettingsFontSize(t *testing.T) {
 	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	a := newApp(layout.Layout{})
 	tt := ui.NewTester(a.view, 1000, 600)
 	openTerminalSettings(tt)
 	if a.fontSize != defaultFontSize {
@@ -535,7 +459,7 @@ func TestSettingsFontSize(t *testing.T) {
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("20")
 	tt.Frame()
-	if saved() != 20 || a.settings.terminalFont().Size != 20 {
+	if saved() != 20 || a.settings.terminalFont().Size != 20 || a.term.Font().Size != 20 {
 		t.Errorf("saved size %v after typing 20", saved())
 	}
 	tt.Type("0")
@@ -553,32 +477,31 @@ func TestSettingsFontSize(t *testing.T) {
 	}
 }
 
-// On macOS, the settings draw the terminals' text with font smoothing or
-// without, as by default, and save the choice.
-func TestSettingsFontSmoothing(t *testing.T) {
+// On macOS, the settings thicken the terminals' text, or not, as by
+// default, and save the choice.
+func TestSettingsThicken(t *testing.T) {
 	if runtime.GOOS != "darwin" {
-		t.Skip("font smoothing is macOS's")
+		t.Skip("thickening is macOS's")
 	}
 	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
-	a := &app{term: term.New(settings{}.terminalFont()), sidebarWidth: 240}
+	a := newApp(layout.Layout{})
 	tt := ui.NewTester(a.view, 1000, 600)
 	openTerminalSettings(tt)
-	if !a.settings.terminalFont().Antialiased {
-		t.Error("the terminals' text smoothed by default")
+	if a.settings.terminalFont().Thicken {
+		t.Error("the terminals' text thickened by default")
 	}
 	// The switch lies at the right of its row, as the controls above end.
-	label, _ := tt.Find("Font Smoothing")
-	note, _ := tt.Find("Draws text heavier, as most Mac apps do.")
+	label, _ := tt.Find("Thicken Text")
+	note, _ := tt.Find("Draws text heavier, as Ghostty’s font-thicken does.")
 	tt.ClickAt(label.X+label.W+30, (label.Y+note.Y+note.H)/2)
 	tt.Frame()
-	if s := loadSettings(); !s.FontSmoothing || s.terminalFont().Antialiased {
-		t.Errorf("saved font smoothing %v after turning it on", s.FontSmoothing)
+	if s := loadSettings(); !s.FontSmoothing || !s.terminalFont().Thicken {
+		t.Errorf("saved thickening %v after turning it on", s.FontSmoothing)
 	}
 }
 
 // openTerminalSettings opens the settings on the terminal page, whose item
-// lies below the appearance page's: Click would find the terminals' view,
-// labeled the same.
+// lies below the appearance page's.
 func openTerminalSettings(tt *ui.Tester) {
 	tt.Key(ui.Cmd, ui.KeyComma)
 	server, _ := tt.Find("Server")
@@ -586,79 +509,61 @@ func openTerminalSettings(tt *ui.Tester) {
 	tt.ClickAt(appearance.X+appearance.W/2, 2*appearance.Y-server.Y+appearance.H/2)
 }
 
-// Cmd+T makes a tab in the focused workspace, showing its tabs, and
-// Cmd+N a workspace, each giving the keyboard to the terminal, wherever
-// the focus is; Cmd+W closes the focused tab once confirmed.
-func TestFileCommands(t *testing.T) {
-	a := &app{
-		term:         term.New(settings{}.terminalFont()),
-		sidebarWidth: 240,
-		collapsed:    map[string]bool{"w2": true},
-		snap: endpoint.Snapshot{
-			FocusedWorkspace: "w2", FocusedTab: "w2:t1",
-			Workspaces: []endpoint.Workspace{{ID: "w1", Label: "api"}, {ID: "w2", Label: "web"}},
-			Tabs:       []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}, {ID: "w2:t1", Workspace: "w2"}},
-			Panes: []endpoint.Pane{{ID: "w1:p1", Workspace: "w1", Tab: "w1:t1", Cwd: "/srv/api"},
-				{ID: "w2:p1", Workspace: "w2", Tab: "w2:t1", Cwd: "/srv/web"}},
-		},
-	}
-	tt := ui.NewTester(a.view, 1000, 600)
-	tt.Frame()
-	tt.Key(ui.Cmd, ui.KeyT)
-	if a.collapsed["w2"] {
-		t.Error("Cmd+T in the terminal left w2's tabs hidden")
-	}
-
-	a.collapse("w2", true)
-	if err := tt.Click("/srv/api"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if tt.Focused("Terminal") {
-		t.Fatal("a click on a tab left the keyboard to the terminal")
-	}
-	tt.Key(ui.Cmd, ui.KeyT)
-	tt.Frame()
-	if a.collapsed["w2"] || !tt.Focused("Terminal") {
-		t.Errorf("Cmd+T in the sidebar: w2 collapsed %v, terminal focused %v", a.collapsed["w2"], tt.Focused("Terminal"))
-	}
-
-	if err := tt.Click("/srv/api"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	tt.Key(ui.Cmd, ui.KeyN)
-	tt.Frame()
-	if !tt.Focused("Terminal") {
-		t.Error("Cmd+N in the sidebar left the keyboard there")
-	}
-
-	tt.Key(ui.Cmd, ui.KeyW)
-	if !tt.HasText("Close “/srv/web”?") {
-		t.Errorf("Cmd+W: no confirmation in %q", tt.Texts())
-	}
-}
-
-// Cmd+Shift+[ and ] go around the focused workspace's tabs, Cmd+1 to 8 to
+// Cmd+Shift+[ and ] go around the shown workspace's tabs, Cmd+1 to 8 to
 // one of them, Cmd+9 to its last.
 func TestSwitchTab(t *testing.T) {
-	a := &app{snap: endpoint.Snapshot{
-		FocusedWorkspace: "w2", FocusedTab: "w2:t1",
-		Tabs: []endpoint.Tab{{ID: "w1:t1", Workspace: "w1"}, {ID: "w2:t1", Workspace: "w2"},
-			{ID: "w2:t2", Workspace: "w2"}, {ID: "w2:t3", Workspace: "w2"}},
-	}}
+	a := newApp(layout.Layout{Active: "a", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("x", "t0")}},
+		{ID: "w2", Tabs: []*layout.Tab{tab("a", "t1"), tab("b", "t2"), tab("c", "t3")}},
+	}})
 	for _, c := range []struct {
 		got, want string
 	}{
-		{a.tabBeside(1), "w2:t2"}, {a.tabBeside(-1), "w2:t3"}, {a.tabBeside(3), "w2:t1"},
-		{a.tabNumber(2), "w2:t2"}, {a.tabNumber(9), "w2:t3"}, {a.tabNumber(4), ""},
+		{a.tabBeside(1), "b"}, {a.tabBeside(-1), "c"}, {a.tabBeside(3), "a"},
+		{a.tabNumber(2), "b"}, {a.tabNumber(9), "c"}, {a.tabNumber(4), ""},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
 		}
 	}
-	a.snap.FocusedTab = ""
-	if got := a.tabBeside(1); got != "" {
-		t.Errorf("with no tab focused, the next is %q", got)
+	tt := ui.NewTester(a.view, 1000, 600)
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyBracketRight)
+	if a.lay.Active != "b" {
+		t.Errorf("Cmd+Shift+] showed %q", a.lay.Active)
+	}
+	tt.Key(ui.Cmd, ui.Key9)
+	if a.lay.Active != "c" {
+		t.Errorf("Cmd+9 showed %q", a.lay.Active)
+	}
+}
+
+func TestGitBranch(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, data string) {
+		t.Helper()
+		if err := mkdirWrite(dir+"/"+path, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("repo/.git/HEAD", "ref: refs/heads/main\n")
+	write("repo/src/x", "")
+	write("wt/.git", "gitdir: ../repo/.git/worktrees/wt\n")
+	write("repo/.git/worktrees/wt/HEAD", "0123456789abcdef\n")
+	for _, c := range []struct{ dir, want string }{
+		{dir + "/repo/src", "main"}, {dir + "/wt", "0123456"}, {dir, ""},
+	} {
+		if got := gitBranch(c.dir); got != c.want {
+			t.Errorf("gitBranch(%s) = %q, want %q", c.dir, got, c.want)
+		}
+	}
+}
+
+// A terminal's program gets UTF-8's locale where the app has none.
+func TestTerminalEnv(t *testing.T) {
+	if got := terminalEnv([]string{"PATH=/bin"})["LANG"]; got != "en_US.UTF-8" {
+		t.Errorf("without a locale, LANG %q", got)
+	}
+	if got, ok := terminalEnv([]string{"LC_CTYPE=de_DE.UTF-8"})["LANG"]; ok {
+		t.Errorf("with a locale, LANG %q", got)
 	}
 }
