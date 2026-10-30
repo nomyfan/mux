@@ -76,6 +76,10 @@ func TestWithCore(t *testing.T) {
 
 	pump("workspace", func() bool { return a.conn != nil && len(a.lay.Workspaces) == 1 })
 	first := a.focusedTerminal()
+	// In the user's home, not where the core started (here, the package).
+	if home, _ := os.UserHomeDir(); a.cwdOf(first) != home {
+		t.Errorf("the first terminal starts in %q, want %q", a.cwdOf(first), home)
+	}
 	pump("shell prompt", func() bool { return strings.Contains(text(first), "$") && tt.Focused("Terminal") })
 	tt.Type("echo mux-$((6*7))")
 	tt.Key(0, ui.KeyEnter)
@@ -101,6 +105,24 @@ func TestWithCore(t *testing.T) {
 	if err != nil || !strings.Contains(string(doc.Value), second) {
 		t.Fatalf("the core keeps %s, %v", doc.Value, err)
 	}
+
+	// Stopped from the settings, which have the keyboard, and started in
+	// place of the panes, the core comes back with its terminals, and the
+	// focused pane takes the keyboard again.
+	tt.Key(ui.Cmd, ui.KeyComma)
+	pump("settings", func() bool { return tt.HasText("Stop Server…") && a.term.Focused() == "" })
+	a.stopServer()
+	tt.Key(0, ui.KeyEscape)
+	pump("stopped", func() bool { return tt.HasText("herdr-core is stopped") && !a.settingsOpen })
+	if err := tt.Click("Start Server"); err != nil {
+		t.Fatal(err)
+	}
+	pump("restarted shell", func() bool {
+		return a.conn != nil && strings.Contains(text(second), "$") && a.term.Focused() == second
+	})
+	tt.Type("echo again")
+	tt.Key(0, ui.KeyEnter)
+	pump("output after the restart", func() bool { return strings.Contains(text(second), "again\n") })
 
 	// Closing a pane ends its terminal.
 	tt.Key(ui.Cmd|ui.Shift, ui.KeyW)

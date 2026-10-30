@@ -117,16 +117,16 @@ func (v *View) dragInput(ev ui.InputEvent) bool {
 	return false
 }
 
-// paintDrop shows where the pane the user drags goes, if dropped.
-func (v *View) paintDrop(p *ui.Painter, r ui.Rect) {
+// dropZone shows where the pane the user drags goes, if dropped: over the
+// panes, as their terminals would hide it under them.
+func (v *View) dropZone(c *ui.Context) {
 	d := v.paneDrag
 	if d == nil || !d.moving {
 		return
 	}
 	if _, _, box, ok := v.dropAt(d.x, d.y); ok {
-		box.X, box.Y = box.X+r.X, box.Y+r.Y
-		p.Fill(box, v.accent.Alpha(0.25), 0)
-		p.Stroke(box, v.accent, 0, 2)
+		ui.Box(c.Key("drop zone")).Label("Drop Zone").Absolute().Left(box.X).Top(box.Y).Size(box.W, box.H).
+			Background(v.accent.Alpha(0.25)).Border(2, v.accent)
 	}
 }
 

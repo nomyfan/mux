@@ -11,9 +11,34 @@
 ## 交接（2026-10-29）
 
 - 代码在分支 `hc-migration`，已推送。Mux 已经完全换到 herdr-core：连接、终端显示、输入、分屏、布局保存、agent 状态、启停 core 都能用。
-- 在 Linux 上用真实 herdr-core 0.1.13 验证过（单元测试、连真实 core 的端到端测试、Xvfb 里跑真实 app 截图），**还没在 macOS 上跑过**，Mac 上要确认的事列在下面"没做的、需要在 Mac 上确认的"。
+- 在 Linux 上用真实 herdr-core 0.1.13 验证过（单元测试、连真实 core 的端到端测试、Xvfb 里跑真实 app 截图）；2026-10-30 在 macOS 上验证过，见下面"macOS 上的验证"。
 - Mac 上开始：先装 hc（`curl -fsSL https://releases.herdr.dev/core/install.sh | sh`），再 `go tool mygo dev`。想不碰自己正在用的 core，按下面"手工跑的方法"设一组隔离的环境变量。
 - 跑测试：`CGO_ENABLED=0 go test ./...`；加 `MUX_HC_TEST=1` 会另外启动一个临时的 core 跑端到端测试，结束时停掉。
+
+## macOS 上的验证（2026-10-30）
+
+macOS 15.7.1（Apple Silicon），herdr-core 0.1.14，用隔离的 core 跑打包好的 `Mux.app`（`open -n --env ...`，父进程是 launchd）。
+
+- 测试：`MUX_HC_TEST=1 go test -race ./...` 全部通过。
+- 打包：`go tool mygo build` 出 `.app` 和 `.dmg`，`Contents/Resources/libghostty-vt.dylib` 在，`LSMinimumSystemVersion` 是 13.0，`CFBundleVersion` 是提交短哈希。
+- 窗口：红绿灯和 pane 头部居中对齐；菜单栏有 File（New Tab ⌘T、New Workspace ⌘N、Close Tab… ⌘W、Close Pane ⇧⌘W）。
+- 终端：颜色、粗体、下划线、`ls -G`、中文双宽、emoji、制表符、光标闪烁都正常；Cmd+D / Cmd+Shift+D 分屏、Cmd+Shift+Enter 放大、Cmd+← 切焦点、点 sidebar 切 tab、输入只进焦点 pane。
+- 设置：Server 页显示版本和 `~/.local/bin/herdr-core`；用户已有的字体设置（含 fallback 字体）生效；Thicken Text 开关即时生效，开时笔画略粗。
+- Stop Server（带确认）后 core 不会被重新拉起；Start Server 后三个 keep 的 pane 都换上新 shell，回到原来的目录。退出再打开 app，布局原样恢复。
+- 登录环境：从 Finder 打开时，`zsh -l -c` 读 `.zshenv` / `.zprofile`，不读 `.zshrc`；所以 core 的 PATH 里有 `~/.local/bin`（`go`、`hc`）但没有只在 `.zshrc` 里加的（bun、nvm 的 node）。pane 里的 zsh 是交互式的，会自己读 `.zshrc`，实测 pane 里这些都在。`LANG` 为空时 Mux 补 `en_US.UTF-8`。
+
+在 Mac 上发现并修掉的问题：
+
+- **拖动 pane 时 drop zone 只露出头部**：drop zone 原来画在 pane 区自己的 `Draw` 里，在子元素下面。旧实现的格子是 pane 区自己画的，新实现里每个终端是插件的子元素，会把它盖住：放到上、左、右或交换时只看得到头部那一条，放到下侧时完全看不到，看起来像判断错了。位置判断本身没问题（25% 边缘规则）。现在 drop zone 是一个叠加在 pane 之上的元素，在拖动时的标题小卡片下面（`TestDragPane` 检查它的位置，并检查终端中间的像素在拖动时确实变了色）。
+
+- **第一个终端开在 `/`**：`terminal.run` 不给 `cwd` 时，core 用它自己的工作目录，也就是启动它的进程所在的目录。从 Finder 打开的 app 工作目录是 `/`，在终端里 `go tool mygo dev` 则是仓库目录。现在没有焦点 pane 可跟时，新终端开在用户主目录（`TestWithCore` 检查）。
+- **Start Server 后键盘没回到终端**：在设置里停 core 时键盘在对话框里，pane 区换成"已停止"的提示；在那里点 Start Server 后按钮消失，`Reset()` 只给原来有键盘的 pane 补焦点，结果谁都没拿到键盘，打字没反应。现在在 pane 区点 Start Server 后键盘交给 tab 的焦点 pane；在设置里点则不动，免得抢走对话框的键盘（`TestWithCore` 检查）。
+
+还没确认的：
+
+- **中文输入法**在终端里的合成位置：用 System Events 打不出非 ASCII 字符，需要手工试。
+- **真正从 Finder 双击打开**：`open --env` 会把调用者的整套环境带给 app，不完全等同；上面登录环境的结论是用 `env -i` 模拟 launchd 环境跑 `zsh -l` 得到的。
+- 和迁移无关、main 上就有的：Mux 菜单里没有 Settings…（Cmd+, 只在窗口里生效）；View 菜单是 MyGo 默认的，带 Reload、Toggle Developer Tools 和 Zoom In / Out。Cmd+Backspace 不删整行（插件不把 Cmd 组合键发给程序，Ghostty 默认把它映射成 `^U`）。
 
 ## 背景
 
@@ -179,7 +204,7 @@ hc server stop                 # 用完停掉
 
 ### 没做的、需要在 Mac 上确认的
 
-- **没在 macOS 上跑过**，只在 Linux（Xvfb）上验证了。需要在 Mac 上确认：`go tool mygo build` 打的 .app 里有 libghostty-vt（`mygo.config.ts` 已设 `minimumSystemVersion: "13.0"`）；红绿灯位置；Cmd 快捷键和 File 菜单；从 Finder 打开时取登录 shell 环境；Thicken Text 的效果；中文输入法在终端里的合成位置。
+- **macOS**：已验证，见上面"macOS 上的验证"；中文输入法的合成位置还要手工试。
 - **和 Herdr app 共用布局**：没做。Mux 只用自己的 `mux` 文档；不在它布局里的终端（比如 Herdr app 开的）只在上报状态时出现在 Agents 列表里，点它会给它开一个 tab。herdr-app 的格式在它的 `src/mirror.rs`，没有稳定性承诺。
 - **多 viewer 尺寸**（`ResizeByConn` + `size` 事件）：没做。
 - **其他机器的终端**（`machine/t7`）：事件流里会有，Mux 没特别处理；`cwdOf` / Git 分支只看本机路径。

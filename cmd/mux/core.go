@@ -309,12 +309,16 @@ func terminalEnv(env []string) map[string]string {
 	return vars
 }
 
-// run starts a shell in a new terminal, in cwd, "" for the core's choice,
-// and gives its address to done once it runs.
+// run starts a shell in a new terminal, in cwd, "" for the user's home
+// (the core's choice would be where it started, "/" from the Finder), and
+// gives its address to done once it runs.
 func (a *app) run(cwd string, done func(address string)) {
 	conn, gen := a.conn, a.gen
 	if conn == nil {
 		return
+	}
+	if cwd == "" {
+		cwd, _ = os.UserHomeDir()
 	}
 	go func() {
 		t, err := conn.Run(hc.RunOptions{Cwd: cwd, Env: terminalEnv(a.env), Labels: map[string]string{"mux": "1"}, Keep: true, NoParent: true})
@@ -477,10 +481,15 @@ func (a *app) stopServer() {
 	}()
 }
 
-// startServer starts the core again after the user stopped it.
+// startServer starts the core again after the user stopped it. Started in
+// place of the panes, by a button that goes with it, the keyboard goes to
+// the tab's focused pane; in the settings, it stays there.
 func (a *app) startServer() {
 	a.starting, a.serverErr = true, ""
 	a.gate.start()
+	if !a.settingsOpen {
+		a.term.Focus()
+	}
 }
 
 // clientEnv returns the environment `hc connect` runs in, which the core

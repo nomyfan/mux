@@ -239,7 +239,6 @@ func (v *View) Build(c *ui.Context, tab *layout.Tab, att Attacher, hooks Hooks) 
 			l := d.Line
 			p.Fill(ui.Rect{X: r.X + l.X, Y: r.Y + l.Y, W: l.W, H: l.H}, t.Border, 0)
 		}
-		v.paintDrop(p, r)
 	})
 	e.Children(func() {
 		if v.err != "" {
@@ -251,6 +250,7 @@ func (v *View) Build(c *ui.Context, tab *layout.Tab, att Attacher, hooks Hooks) 
 		for i := range v.dividers {
 			v.divide(c, v.dividers[i])
 		}
+		v.dropZone(c)
 		v.dragChip(c)
 		for _, b := range v.boxes {
 			if p := v.panes[b.terminal]; p != nil && p.search.open {

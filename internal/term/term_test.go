@@ -1,6 +1,7 @@
 package term
 
 import (
+	"image/color"
 	"io"
 	"strings"
 	"sync"
@@ -180,9 +181,18 @@ func TestDragPane(t *testing.T) {
 		tt.Frame()
 	}
 	p2 := v.boxes[1].card
+	center := func() color.RGBA { return tt.Image().RGBAAt(int(p2.X+p2.W/2), int(p2.Y+p2.H/2)) }
+	plain := center()
 	drag("t1", p2.X+p2.W/2, p2.Y+p2.H/2)
 	if !tt.HasText("dragging t1") {
 		t.Errorf("no chip while dragging: %q", tt.Texts())
+	}
+	// The zone covers the whole target, over its terminal.
+	if zone, ok := tt.Find("Drop Zone"); !ok || zone != p2 {
+		t.Errorf("drop zone %v, want %v", zone, p2)
+	}
+	if center() == plain {
+		t.Error("the drop zone doesn't show over the terminal")
 	}
 	tt.Release(p2.X+p2.W/2, p2.Y+p2.H/2)
 	tt.Frame()
@@ -196,6 +206,9 @@ func TestDragPane(t *testing.T) {
 	tt.Frame()
 	p := v.boxes[0].card
 	drag("t1", p.X+p.W/2, p.Y+p.H-5)
+	if zone, _ := tt.Find("Drop Zone"); zone != (ui.Rect{X: p.X, Y: p.Y + p.H/2, W: p.W, H: p.H / 2}) {
+		t.Errorf("drop zone %v by the bottom of %v", zone, p)
+	}
 	tt.Release(p.X+p.W/2, p.Y+p.H-5)
 	tt.Frame()
 	if root := tab.Root; !root.Vertical || root.A.Terminal != "t2" || root.B.Terminal != "t1" {
