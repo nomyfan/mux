@@ -53,6 +53,8 @@ type app struct {
 	saving     bool
 	dirty      bool
 	branches   map[string]*branch
+	// seen holds the agents whose done the user has looked at (state).
+	seen map[string]bool
 	// chosen is the item the sidebar shows chosen: a tab, or an agent's
 	// terminal.
 	chosen        string
@@ -153,6 +155,7 @@ var agentIcons = func() map[string]*ui.SVG {
 func (a *app) view(c *ui.Context) {
 	setTheme(c)
 	a.services = c.Services()
+	a.look()
 	if c.Shortcut(ui.Cmd, ui.KeyB) {
 		a.sidebarHidden = !a.sidebarHidden
 	}
@@ -372,7 +375,7 @@ func (a *app) agentItem(c *ui.Context, ag hc.Terminal) {
 			where = a.workspaceName(ws)
 		}
 		ui.Text(c, where).FontSize(t.FontSize - 1).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
-		statusDot(c, ag.Status.State)
+		statusDot(c, a.state(ag.Address))
 	})
 }
 
@@ -721,6 +724,11 @@ func (a *app) pane(c *ui.Context, titleLeft float32) {
 	hooks := term.Hooks{Header: header, Changed: a.changed,
 		Title: func(c *ui.Context, terminal string) { a.paneTitle(c, terminal, false, false) }}
 	a.term.Build(c, tab, a.attacher(), hooks).Grow(1).MinWidth(0)
+	// The keyboard went to an agent's pane after the sidebar and its
+	// header were built: they show it idle in another pass.
+	if a.look() {
+		c.Invalidate()
+	}
 }
 
 // emptyView shows, in place of the panes, that there are none, with a
@@ -838,7 +846,7 @@ func (a *app) unnamedPane(terminal string) string {
 // mark of the agent, or a shell's; grip shows the mark of moving instead.
 func (a *app) paneTitle(c *ui.Context, terminal string, focused, grip bool) {
 	t := c.Theme()
-	status, isAgent := a.agent(terminal)
+	_, isAgent := a.agent(terminal)
 	if icon, mark := a.itemIcon(terminal); mark != nil && !grip {
 		ui.Image(c, mark).Size(16, 16)
 	} else {
@@ -852,7 +860,7 @@ func (a *app) paneTitle(c *ui.Context, terminal string, focused, grip bool) {
 		title.TextColor(t.TextMuted)
 	}
 	if isAgent {
-		statusDot(c, status.State)
+		statusDot(c, a.state(terminal))
 	}
 	ui.Text(c, a.dirOf(terminal)).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
 	if branch := a.branchOf(terminal); branch != "" {

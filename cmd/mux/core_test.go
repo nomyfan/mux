@@ -98,6 +98,11 @@ func TestWithCore(t *testing.T) {
 	if strings.Contains(text(first), "second") {
 		t.Error("the first pane took what was typed in the second")
 	}
+	// An agent done in the pane that has the keyboard shows idle, as the
+	// user sees it.
+	tt.Type(`printf '\033]7501;state=done:app=codex\033\\'`)
+	tt.Key(0, ui.KeyEnter)
+	pump("idle agent", func() bool { return a.state(second) == "idle" })
 
 	// The layout is in the core, for the next launch.
 	pump("layout saved", func() bool { return !a.saving && !a.dirty && a.layVersion > 0 })

@@ -33,6 +33,34 @@ func (a *app) agent(address string) (*hc.Status, bool) {
 	return t.Status, true
 }
 
+// state is an agent's state as the app shows it: done turns idle once the
+// user has looked at its pane, as in Herdr app; the program itself stays
+// done till its next turn.
+func (a *app) state(address string) string {
+	s, ok := a.agent(address)
+	if !ok {
+		return ""
+	}
+	if s.State == "done" && a.seen[address] {
+		return "idle"
+	}
+	return s.State
+}
+
+// look notes that the user sees the agent whose pane has the keyboard,
+// as the window does, reporting whether that agent was done unseen.
+func (a *app) look() bool {
+	focused := a.term.Focused()
+	if s, ok := a.agent(focused); !ok || s.State != "done" || a.seen[focused] {
+		return false
+	}
+	if a.seen == nil {
+		a.seen = map[string]bool{}
+	}
+	a.seen[focused] = true
+	return true
+}
+
 // agentName names an agent by the app it reports, else its program.
 func (a *app) agentName(address string) string {
 	if s, ok := a.agent(address); ok && s.App != "" {
@@ -117,8 +145,8 @@ func (a *app) tabNames(tab *layout.Tab) (name, shown string) {
 func (a *app) tabStatus(tab *layout.Tab) string {
 	var states []string
 	for _, n := range tab.Leaves() {
-		if s, ok := a.agent(n.Terminal); ok {
-			states = append(states, s.State)
+		if _, ok := a.agent(n.Terminal); ok {
+			states = append(states, a.state(n.Terminal))
 		}
 	}
 	return urgentStatus(states)

@@ -275,6 +275,31 @@ func TestStatusDotMoves(t *testing.T) {
 	}
 }
 
+// A done agent the user looked at shows idle, also as it reports done
+// again, and done once more after its next turn.
+func TestDoneTurnsIdle(t *testing.T) {
+	a := newApp(layout.Layout{Workspaces: []*layout.Workspace{{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1", "t2")}}}},
+		agent("t1", "/srv/api", "claude-code", "done"), agent("t2", "/srv/web", "codex", "done"))
+	a.seen = map[string]bool{"t2": true}
+	if a.state("t1") != "done" || a.state("t2") != "idle" {
+		t.Fatalf("t1 %q, t2 %q", a.state("t1"), a.state("t2"))
+	}
+	status := func(state string) {
+		a.inbox = []hc.Event{{Method: "event", Seq: a.terms.Seq + 1, Type: "status", Terminal: "t2",
+			Data: []byte(`{"status":{"state":"` + state + `","app":"codex"}}`)}}
+		a.receive()
+	}
+	status("done")
+	if got := a.state("t2"); got != "idle" {
+		t.Errorf("done again, the agent is %q", got)
+	}
+	status("working")
+	status("done")
+	if got := a.state("t2"); got != "done" {
+		t.Errorf("after its next turn, the agent is %q", got)
+	}
+}
+
 // The sidebar lists the agents after the workspaces, by their pane's name
 // or their own, beside their workspace; choosing one shows its pane, and
 // one without a pane gets a tab.

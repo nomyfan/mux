@@ -196,10 +196,17 @@ func (a *app) receive() {
 		case "restarted":
 			// A kept terminal's new shell: its pane attaches again.
 			a.term.Drop(ev.Terminal)
+		case "status":
+			// A report other than done is news again; done again, as a
+			// program repeats itself, is not.
+			if s, ok := a.agent(ev.Terminal); !ok || s.State != "done" {
+				delete(a.seen, ev.Terminal)
+			}
 		case "finished":
 			a.forget(ev.Terminal)
 			pruned = true
 		case "removed":
+			delete(a.seen, ev.Terminal)
 			pruned = true
 		}
 		if ev.Method == "missed" {
