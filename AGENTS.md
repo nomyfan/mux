@@ -70,7 +70,7 @@ Mux's layout, kept in the core's `mux` document. No UI dependency.
 
 Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the program's output and encodes keys, mouse and paste as the program asked (Kitty keyboard protocol, bracketed paste and so on), selects and copies, opens links and searches.
 
-- `view.go`: `View` holds the panes' terminals across frames, made as a pane first shows and closed as it goes (`Retain`, `Drop`, `Reset`). `Build` lays out the tab with headers along each pane's top (`HeaderHeight`), the dividers between panes, which drag, and asks for another frame as the area's size changes, as it lays out in the last committed box. Focus follows the keyboard both ways: a click in a terminal focuses its pane in the tab, and the tab's focus, as the app moves it, takes the keyboard. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane. While a transition around it settles (`Settling`, as the sidebar slides), the panes take the width they settle at, so their programs don't redraw at every step.
+- `view.go`: `View` holds the panes' terminals across frames, made as a pane first shows and closed as it goes (`Retain`, `Drop`, `Reset`). A hidden tab's panes stay attached, so switching is instant, though each holds a stream and a scrollback. `Build` lays out the tab with headers along each pane's top (`HeaderHeight`), the dividers between panes, which drag, and asks for another frame as the area's size changes, as it lays out in the last committed box. Focus follows the keyboard both ways: a click in a terminal focuses its pane in the tab, and the tab's focus, as the app moves it, takes the keyboard. Cmd+arrow keys move the focus to the pane beside the focused one and Cmd+Option+arrow swap it with that pane. While a transition around it settles (`Settling`, as the sidebar slides), the panes take the width they settle at, so their programs don't redraw at every step.
 - `conn.go`: a pane terminal's `Conn`: it attaches as the plugin first tells it the view's size, so the first paint comes at that size; until then reads wait and what is typed waits too. It tells the core the size, the cell size and the colors as they change.
 - `search.go`: per-pane search (Cmd+F) with the plugin's search: Enter goes to older matches, Shift+Enter to newer.
 - `rearrange.go`: dragging a pane by its title. Dropped within 25% of a target pane's edge, it goes beside the target; dropped in the middle, the two swap places.
@@ -99,6 +99,7 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 - The core draws nothing and has no layout: it relays raw output, answers terminal queries itself (from the `Facts` a viewer sends) and drops them from what it relays.
 - It reads no screens: a program that reports no OSC 7501 status has none. It answers OSC 7501's probe itself (Claude Code waits about 2 seconds for it), keeps the `app` a program reports, and shows the last status to a new viewer.
 - A terminal without a viewer is 200×120, as it starts and after its last viewer goes. A new shell prints its first prompt at that width and again at the pane's as Mux attaches, so the first line can show the two mixed.
+- With several viewers, a terminal takes the size of the one that attached or typed last, and that of another as it goes.
 - `keep` terminals come back after a core or machine restart with a fresh shell in their last folder (not the program they ran); until then, attaching says `unavailable`, and a `restarted` event follows.
 - A core someone else started (a terminal's `hc`) keeps that one's environment: Mux's login-shell environment only reaches a core Mux starts.
 
@@ -110,13 +111,12 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 - The terminal plugin calls a `Conn`'s size and theme methods on its own goroutine and waits for them; it writes `[Disconnected]` as the `Conn` ends. It sends no Cmd chords to the program: the pane area's shortcuts take them.
 - A focus request takes effect in a later frame: tests wait for `Focused` before typing. `Tester.Focused` and `Find` go by label, and the settings' Terminal page shares one with the terminals.
 
+### Not supported
+
+- Herdr app's layout (its `herdr-app` document) and terminals of other machines (`machine/t7`). Such terminals still show as agents, and choosing one gives it a tab; for another machine's, `cwdOf` and Git branches read local paths.
+
 ### Not done yet
 
-- Size with several viewers (`ResizeByConn` and `size` events): with Herdr app on the same terminal, the last active viewer's size wins.
-- Sharing the layout with Herdr app, whose `herdr-app` document has a format of its own without stability promises: its terminals show only as agents, and choosing one gives it a tab.
-- Terminals of other machines (`machine/t7`): shown as any other; `cwdOf` and Git branches read local paths.
-- Hidden tabs stay attached: switching is instant, but each pane holds a stream and a scrollback.
+- Size with several viewers (`size` events): another viewer of a terminal (a second Mux on the same core, `hc attach`) takes its size as it attaches or types, and Mux keeps drawing at its own.
 - `done` stays `done` after the user looks (Herdr app shows `idle`).
-- The settings' font preview draws with `ui.Font`, not a terminal of the plugin.
-- Not checked on macOS: where an input method's composition shows in a terminal; an app opened by double-click in the Finder (checked with `env -i` and `open --env` instead).
 - The app menu has no Settings… item, and the View menu is MyGo's default, with Reload and Toggle Developer Tools.
