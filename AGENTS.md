@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Mux is a native GUI client for [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`), a terminal runtime for coding agents, written in Go with [MyGo](https://github.com/egoist/mygo)'s native `ui` package. It talks to the core through `hc connect` and shows its terminals in a window: a sidebar of workspaces, tabs and agent states on the left, and the chosen tab's panes on the right. The core runs the programs and relays their raw output; each pane feeds it to a terminal emulator of MyGo's terminal plugin (libghostty-vt). Workspaces, tabs and splits are Mux's own: the core has none, and keeps Mux's layout as a document. `docs/hc-migration.md` records why Mux moved from herdr 1 to herdr-core, what was found on the way, and what is left.
+Mux is a native GUI client for [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`), a terminal runtime for coding agents, written in Go with [MyGo](https://github.com/egoist/mygo)'s native `ui` package. It talks to the core through `hc connect` and shows its terminals in a window: a sidebar of workspaces, tabs and agent states on the left, and the chosen tab's panes on the right. The core runs the programs and relays their raw output; each pane feeds it to a terminal emulator of MyGo's terminal plugin (libghostty-vt). Workspaces, tabs and splits are Mux's own: the core has none, and keeps Mux's layout as a document.
 
 ## Commands
 
@@ -17,6 +17,18 @@ scripts/make-appearance-previews.sh       # write the settings' appearance pictu
 ```
 
 `mygo` is pinned through the `tool` directive in `go.mod`; nothing to install separately. App settings (name, identifier, entry `./cmd/mux`, macOS 13 or later for libghostty-vt) live in `mygo.config.ts`, which MyGo evaluates with Bun or Node.js 22.6+; it sets `CFBundleVersion` to the short commit hash, shown in parentheses in the about panel. Running the app needs herdr-core installed (`curl -fsSL https://releases.herdr.dev/core/install.sh | sh`). The terminal plugin loads libghostty-vt at run time, without cgo: `mygo build` puts it in the app, and `go run` / `go test` download it once into the user's cache.
+
+To run the app by hand without touching the user's own core, give it one of its own (see Notes):
+
+```sh
+R=$(mktemp -d /tmp/muxXXXX)   # under /tmp: socket paths are short
+export HC_SESSION=muxdev XDG_RUNTIME_DIR=$R XDG_STATE_HOME=$R/state XDG_CONFIG_HOME=$R/config
+go tool mygo dev               # or: open -n --env HC_SESSION=$HC_SESSION ... build/darwin-arm64/Mux.app
+hc ls; hc send t1 'echo hi'   # with the same variables, hc reaches that core
+hc server stop                 # stop it when done
+```
+
+In a pane, `printf '\e]7501;state=blocked:kind=permission:app=claude-code\e\\'` plays an agent asking for permission, as Claude Code does.
 
 ## Modules
 
@@ -72,11 +84,39 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot and `hc-migration.md`, the record of the move to herdr-core; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
 
 ## Notes
 
 - Keep this file current. When a change adds, removes, renames or moves a module or file listed above, shifts a module's responsibility, or changes the commands, update this file in the same change.
 - Before changing UI code, read `.agents/skills/mygo-maintenance/SKILL.md` for MyGo's lifetime, identity, threading and testing rules. UI tests use `ui.NewTester`.
 - Never let a test or a probe act on the user's own core. The tests against a real herdr-core (`MUX_HC_TEST=1`) run one of their own: `HC_SESSION`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME` all point at temporary places, and they stop it as they end. Do the same for any probe by hand. Socket paths are short (104 bytes on macOS), so the runtime directory goes under `/tmp`, not `$TMPDIR`.
-- Any `hc` command, `hc connect` among them, starts the core if none runs: stopping it from the app holds the app's reconnection back until the user starts it again.
+- Any `hc` command, `hc connect` and `hc schema` among them, starts the core if none runs: stopping it from the app holds the app's reconnection back until the user starts it again. Run even a lookup with the variables above.
+
+### herdr-core
+
+- The API is the core's to describe: `hc schema` (OpenRPC). It only grows, but is a preview (0.x); `Hello.Check` tells a core Mux can't use, by protocol generation and the methods it calls, not by version.
+- The core draws nothing and has no layout: it relays raw output, answers terminal queries itself (from the `Facts` a viewer sends) and drops them from what it relays.
+- It reads no screens: a program that reports no OSC 7501 status has none. It answers OSC 7501's probe itself (Claude Code waits about 2 seconds for it), keeps the `app` a program reports, and shows the last status to a new viewer.
+- A terminal without a viewer is 200×120, as it starts and after its last viewer goes. A new shell prints its first prompt at that width and again at the pane's as Mux attaches, so the first line can show the two mixed.
+- `keep` terminals come back after a core or machine restart with a fresh shell in their last folder (not the program they ran); until then, attaching says `unavailable`, and a `restarted` event follows.
+- A core someone else started (a terminal's `hc`) keeps that one's environment: Mux's login-shell environment only reaches a core Mux starts.
+
+### MyGo
+
+- An element's `Draw` paints under its children, and each pane's terminal is a child of the pane area: what must show over the terminals (the drop zone, the drag chip) is a child built after them.
+- `Handle.Bounds` is the last committed frame's: a view that lays out by its own size asks for another frame as that changes, or nothing shows until the next event.
+- A press goes to the innermost element with `HandleInput` (the terminal in a pane, the pane area over a header), which then takes every move and the release, wherever the pointer goes.
+- The terminal plugin calls a `Conn`'s size and theme methods on its own goroutine and waits for them; it writes `[Disconnected]` as the `Conn` ends. It sends no Cmd chords to the program: the pane area's shortcuts take them.
+- A focus request takes effect in a later frame: tests wait for `Focused` before typing. `Tester.Focused` and `Find` go by label, and the settings' Terminal page shares one with the terminals.
+
+### Not done yet
+
+- Size with several viewers (`ResizeByConn` and `size` events): with Herdr app on the same terminal, the last active viewer's size wins.
+- Sharing the layout with Herdr app, whose `herdr-app` document has a format of its own without stability promises: its terminals show only as agents, and choosing one gives it a tab.
+- Terminals of other machines (`machine/t7`): shown as any other; `cwdOf` and Git branches read local paths.
+- Hidden tabs stay attached: switching is instant, but each pane holds a stream and a scrollback.
+- `done` stays `done` after the user looks (Herdr app shows `idle`).
+- The settings' font preview draws with `ui.Font`, not a terminal of the plugin.
+- Not checked on macOS: where an input method's composition shows in a terminal; an app opened by double-click in the Finder (checked with `env -i` and `open --env` instead).
+- The app menu has no Settings… item, and the View menu is MyGo's default, with Reload and Toggle Developer Tools.
