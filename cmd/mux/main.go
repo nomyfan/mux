@@ -183,13 +183,14 @@ func (a *app) view(c *ui.Context) {
 			fc.run()
 		}
 	}
-	// Command-Shift-[ and ] go to the workspace's tab before and after the
-	// one shown, Command-1 to 8 to its first eight, Command-9 to its last.
+	// Command-Shift-[ and ] go to the tab before and after the one shown,
+	// across workspaces; Command-1 to 8 to the shown workspace's first
+	// eight, Command-9 to its last.
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketLeft) {
-		a.showTab(a.tabBeside(-1))
+		a.stepTab(-1)
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketRight) {
-		a.showTab(a.tabBeside(1))
+		a.stepTab(1)
 	}
 	for i, k := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 		if c.Shortcut(ui.Cmd, k) {
@@ -659,20 +660,35 @@ func (a *app) closeShownTab() {
 	}
 }
 
-// tabBeside returns the tab step places after the one shown in its
-// workspace, around from the last to the first, or "" if none.
+// tabBeside returns the tab step places after the one shown, in the
+// sidebar's order: past a workspace's last tab comes the next one's first,
+// and around from the last workspace to the first. "" if none.
 func (a *app) tabBeside(step int) string {
-	ws, tab := a.lay.ActiveTab()
-	if ws == nil {
+	_, shown := a.lay.ActiveTab()
+	if shown == nil {
 		return ""
 	}
-	n := len(ws.Tabs)
-	for i, t := range ws.Tabs {
-		if t == tab {
-			return ws.Tabs[((i+step)%n+n)%n].ID
+	var tabs []*layout.Tab
+	for _, ws := range a.lay.Workspaces {
+		tabs = append(tabs, ws.Tabs...)
+	}
+	n := len(tabs)
+	for i, t := range tabs {
+		if t == shown {
+			return tabs[((i+step)%n+n)%n].ID
 		}
 	}
 	return ""
+}
+
+// stepTab shows the tab step places after the one shown, opening its
+// workspace in the sidebar if collapsed, so that it shows chosen there.
+func (a *app) stepTab(step int) {
+	id := a.tabBeside(step)
+	if ws, _ := a.lay.Tab(id); ws != nil {
+		a.collapse(ws.ID, false)
+	}
+	a.showTab(id)
 }
 
 // tabNumber returns the shown workspace's nth tab, from 1, its last for

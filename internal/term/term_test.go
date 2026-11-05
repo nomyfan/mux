@@ -164,6 +164,33 @@ func TestFocusMoves(t *testing.T) {
 	}
 }
 
+// Cmd+] and Cmd+[ go around the tab's panes in its order, zoomed too.
+func TestCycleFocus(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, testHooks(v, &changed)).Fill() }, 800, 400)
+	waitFor(t, tt, "attach", func() bool { return core.stream("t2") != nil })
+	for _, c := range []struct {
+		key  ui.Key
+		want string
+	}{{ui.KeyBracketRight, "t2"}, {ui.KeyBracketRight, "t1"}, {ui.KeyBracketLeft, "t2"}} {
+		tt.Key(ui.Cmd, c.key)
+		tt.Frame()
+		if tab.Focus != c.want {
+			t.Fatalf("focus %q, want %q", tab.Focus, c.want)
+		}
+	}
+	tt.Type("x")
+	waitFor(t, tt, "input in t2", func() bool { return core.stream("t2").Typed() == "x" })
+	tab.Zoomed = true
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyBracketLeft)
+	tt.Frame()
+	if tab.Focus != "t1" || !tab.Zoomed || len(v.boxes) != 1 || v.boxes[0].terminal != "t1" {
+		t.Errorf("zoomed: focus %q, zoomed %v, %d boxes", tab.Focus, tab.Zoomed, len(v.boxes))
+	}
+}
+
 // A pane dragged by its title onto another swaps with it in the middle,
 // goes beside it by its edge, and stays dropped on itself.
 func TestDragPane(t *testing.T) {

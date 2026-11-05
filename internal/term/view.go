@@ -233,6 +233,8 @@ func (v *View) Build(c *ui.Context, tab *layout.Tab, att Attacher, hooks Hooks) 
 		e.OnShortcut(ui.Cmd, a.key, func() { v.moveFocus(a.direction) })
 		e.OnShortcut(ui.Cmd|ui.Alt, a.key, func() { v.swap(a.direction) })
 	}
+	e.OnShortcut(ui.Cmd, ui.KeyBracketLeft, func() { v.cycleFocus(-1) })
+	e.OnShortcut(ui.Cmd, ui.KeyBracketRight, func() { v.cycleFocus(1) })
 	e.Draw(func(p *ui.Painter, r ui.Rect) {
 		p.Fill(r, bg, 0)
 		for _, d := range v.dividers {
@@ -361,6 +363,28 @@ func (v *View) moveFocus(d layout.Direction) {
 	if next := layout.Neighbor(v.layoutBoxes(), v.tab.Focus, d); next != "" {
 		v.tab.Focus = next
 		v.changed()
+	}
+}
+
+// cycleFocus focuses the pane step places after the focused one in the
+// tab's order, around from the last to the first. The order is the split
+// tree's: a split's left or top side before its right or bottom one, so
+// it follows where the panes are rather than when they were made. A
+// zoomed tab shows the pane focused, so this goes around its panes zoomed.
+func (v *View) cycleFocus(step int) {
+	if v.tab == nil {
+		return
+	}
+	leaves := v.tab.Leaves()
+	n := len(leaves)
+	for i, l := range leaves {
+		if l.Terminal == v.tab.Focus {
+			if next := leaves[((i+step)%n+n)%n].Terminal; next != v.tab.Focus {
+				v.tab.Focus = next
+				v.changed()
+			}
+			return
+		}
 	}
 }
 

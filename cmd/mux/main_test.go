@@ -536,8 +536,9 @@ func openTerminalSettings(tt *ui.Tester) {
 	tt.ClickAt(appearance.X+appearance.W/2, 2*appearance.Y-server.Y+appearance.H/2)
 }
 
-// Cmd+Shift+[ and ] go around the shown workspace's tabs, Cmd+1 to 8 to
-// one of them, Cmd+9 to its last.
+// Cmd+Shift+[ and ] go around all the tabs, past a workspace's last to the
+// next one's first, opening it if collapsed; Cmd+1 to 8 go to one of the
+// shown workspace's tabs, Cmd+9 to its last.
 func TestSwitchTab(t *testing.T) {
 	a := newApp(layout.Layout{Active: "a", Workspaces: []*layout.Workspace{
 		{ID: "w1", Tabs: []*layout.Tab{tab("x", "t0")}},
@@ -546,7 +547,7 @@ func TestSwitchTab(t *testing.T) {
 	for _, c := range []struct {
 		got, want string
 	}{
-		{a.tabBeside(1), "b"}, {a.tabBeside(-1), "c"}, {a.tabBeside(3), "a"},
+		{a.tabBeside(1), "b"}, {a.tabBeside(-1), "x"}, {a.tabBeside(3), "x"}, {a.tabBeside(4), "a"},
 		{a.tabNumber(2), "b"}, {a.tabNumber(9), "c"}, {a.tabNumber(4), ""},
 	} {
 		if c.got != c.want {
@@ -561,6 +562,15 @@ func TestSwitchTab(t *testing.T) {
 	tt.Key(ui.Cmd, ui.Key9)
 	if a.lay.Active != "c" {
 		t.Errorf("Cmd+9 showed %q", a.lay.Active)
+	}
+	a.collapse("w1", true)
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyBracketRight)
+	if a.lay.Active != "x" || a.collapsed["w1"] {
+		t.Errorf("Cmd+Shift+] from the last tab showed %q, w1 collapsed: %v", a.lay.Active, a.collapsed["w1"])
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyBracketLeft)
+	if a.lay.Active != "c" {
+		t.Errorf("Cmd+Shift+[ from the first tab showed %q", a.lay.Active)
 	}
 }
 
