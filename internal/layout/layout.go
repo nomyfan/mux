@@ -127,19 +127,21 @@ func (l *Layout) AddTab(ws *Workspace, terminal string) *Tab {
 }
 
 // Remove removes the pane of a terminal: its split's other side takes the
-// split's room. A tab left with no pane closes, and a workspace with no
-// tab. It reports whether the terminal had a pane.
+// split's room, and the focus, if the pane had it, goes to the pane there
+// nearest it (heir). A tab left with no pane closes, and a workspace with
+// no tab. It reports whether the terminal had a pane.
 func (l *Layout) Remove(terminal string) bool {
 	_, t, _ := l.Find(terminal)
 	if t == nil {
 		return false
 	}
+	heir := t.heir(terminal)
 	if t.remove(terminal) {
 		l.RemoveTab(t.ID)
 		return true
 	}
 	if t.Focus == terminal {
-		t.Focus = t.Leaves()[0].Terminal
+		t.Focus = heir
 	}
 	return true
 }

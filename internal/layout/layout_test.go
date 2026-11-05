@@ -43,6 +43,50 @@ func TestSplitRemove(t *testing.T) {
 	}
 }
 
+// A focused pane that goes leaves the focus to the pane that takes its
+// room, the nearest of its split's other side; another pane's going
+// leaves the focus where it is.
+func TestRemoveFocus(t *testing.T) {
+	// t1 | (t2 / (t3 | t4)), in that order:
+	//
+	//	t1 | t2
+	//	   | t3 | t4
+	panes := func() (*Layout, *Tab) {
+		l := &Layout{}
+		_, tab := l.AddWorkspace("t1")
+		tab.Split("t1", "t2", Right)
+		tab.Split("t2", "t3", Down)
+		tab.Split("t3", "t4", Right)
+		return l, tab
+	}
+	for _, c := range []struct{ focus, gone, want string }{
+		{"t1", "t1", "t2"}, // a left pane: the next, first of the other side
+		{"t2", "t2", "t3"}, // a top pane: the next
+		{"t4", "t4", "t3"}, // a right pane: the previous
+		{"t1", "t3", "t1"}, // not focused: unmoved
+	} {
+		l, tab := panes()
+		tab.Focus = c.focus
+		l.Remove(c.gone)
+		if tab.Focus != c.want {
+			t.Errorf("focus on %s, %s gone: focus %q, want %q", c.focus, c.gone, tab.Focus, c.want)
+		}
+	}
+	// A right pane leaves the focus to its left neighbor, which takes its
+	// room, rather than to the pane after it below:
+	//
+	//	t5 | t6
+	//	t7
+	l := &Layout{}
+	_, tab := l.AddWorkspace("t5")
+	tab.Split("t5", "t7", Down)
+	tab.Split("t5", "t6", Right)
+	l.Remove("t6")
+	if tab.Focus != "t5" {
+		t.Errorf("t6 gone: focus %q, want t5", tab.Focus)
+	}
+}
+
 func TestBoxes(t *testing.T) {
 	var l Layout
 	_, tab := l.AddWorkspace("t1")

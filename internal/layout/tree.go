@@ -17,7 +17,10 @@ func (t *Tab) Pane(terminal string) *Node {
 
 // Leaves returns the tab's panes, left to right and top to bottom as the
 // tree has them.
-func (t *Tab) Leaves() []*Node {
+func (t *Tab) Leaves() []*Node { return leaves(t.Root) }
+
+// leaves returns the panes under a node, as Leaves does a tab's.
+func leaves(n *Node) []*Node {
 	var out []*Node
 	var walk func(n *Node)
 	walk = func(n *Node) {
@@ -30,7 +33,7 @@ func (t *Tab) Leaves() []*Node {
 			walk(n.B)
 		}
 	}
-	walk(t.Root)
+	walk(n)
 	return out
 }
 
@@ -70,6 +73,23 @@ func (t *Tab) remove(terminal string) bool {
 	}
 	*p = *other
 	return false
+}
+
+// heir returns the pane that takes a pane's room as it goes: of its
+// split's other side, the one nearest it, which is the next in the tab's
+// order for a left or top pane and the previous for a right or bottom
+// one. "" for the tab's last pane.
+func (t *Tab) heir(terminal string) string {
+	n := t.Pane(terminal)
+	p := t.parentOf(n)
+	if n == nil || p == nil {
+		return ""
+	}
+	if p.A == n {
+		return leaves(p.B)[0].Terminal
+	}
+	side := leaves(p.A)
+	return side[len(side)-1].Terminal
 }
 
 // Direction is where a new pane goes beside another.

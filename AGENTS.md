@@ -65,7 +65,7 @@ A client of herdr-core's API (protocol generation 1; the core's `schema/README.m
 Mux's layout, kept in the core's `mux` document. No UI dependency.
 
 - `layout.go`: workspaces of tabs, the tab shown, adding and removing them, pruning panes whose terminals are gone, and repairing a document read back.
-- `tree.go`: a tab's binary tree of splits whose leaves are panes (a terminal, and a name the user gave): splitting, swapping, moving a pane beside another, laying the panes out in a box with lines between them, and finding the pane beside one toward a direction.
+- `tree.go`: a tab's binary tree of splits whose leaves are panes (a terminal, and a name the user gave): splitting, swapping, moving a pane beside another, the pane that takes a closed one's room and focus (the nearest of its split's other side), laying the panes out in a box with lines between them, and finding the pane beside one toward a direction.
 
 ### `internal/term`
 
