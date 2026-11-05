@@ -550,7 +550,7 @@ func TestSettingsThicken(t *testing.T) {
 	}
 	// The switch lies at the right of its row, as the controls above end.
 	label, _ := tt.Find("Thicken Text")
-	note, _ := tt.Find("Draws text heavier, as Ghostty’s font-thicken does.")
+	note, _ := tt.Find("Draws text heavier, with macOS font smoothing at full strength.")
 	tt.ClickAt(label.X+label.W+30, (label.Y+note.Y+note.H)/2)
 	tt.Frame()
 	if s := loadSettings(); !s.FontSmoothing || !s.terminalFont().Thicken {

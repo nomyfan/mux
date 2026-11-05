@@ -32,8 +32,8 @@ type settings struct {
 	// FontSize is the terminals' font size, 0 for the default.
 	FontSize float64 `json:"font_size,omitempty"`
 	// FontSmoothing draws the terminals' text thicker, with macOS's font
-	// smoothing at its strongest, as Ghostty's font-thicken; without it,
-	// as Ghostty does by default.
+	// smoothing at its strongest, whatever the text's color and the
+	// system's setting.
 	FontSmoothing bool `json:"font_smoothing,omitempty"`
 }
 
@@ -394,7 +394,7 @@ func (a *app) terminalSettings(c *ui.Context) {
 		// Font smoothing is macOS's; elsewhere the switch would change nothing.
 		if runtime.GOOS == "darwin" {
 			ui.Divider(c)
-			settingsRow(c, "Thicken Text", "Draws text heavier, as Ghostty’s font-thicken does.", func() {
+			settingsRow(c, "Thicken Text", "Draws text heavier, with macOS font smoothing at full strength.", func() {
 				ui.Switch(c.Key("font-smoothing"), &a.settings.FontSmoothing).Label("Thicken Text").
 					OnChange(a.applyFont)
 			})
