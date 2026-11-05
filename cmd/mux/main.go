@@ -41,15 +41,18 @@ type app struct {
 	serverErr string
 	// conn is the connection to the core, nil while there is none; gen
 	// counts connections, so that what an old one answers is dropped.
-	// terms are its terminals, machines the other machines it added.
+	// terms are its terminals, machines the other machines it added: nil
+	// without a connection, or for a core without machines.
 	conn     *hc.Conn
 	gen      int
 	terms    hc.Terminals
 	machines []hc.Machine
 	err      string
 	// machineErr is the error of a terminal a machine could not start, as
-	// it was unreachable, which goes as the machine is back.
+	// it was unreachable, which goes as the machine is back. dialing holds
+	// the machines the user asked to connect now, till they answer.
 	machineErr machineErr
+	dialing    map[string]bool
 	// lay is the layout, as of the document's layVersion; saving while a
 	// write of it goes, dirty while it changed since.
 	lay        layout.Layout

@@ -238,7 +238,7 @@ func settingsRow(c *ui.Context, label, description string, control func()) {
 }
 
 // serverSettings shows whether herdr-core runs, with a button starting or
-// stopping it, and where the app finds it.
+// stopping it, and where the app finds it; then the core's machines.
 func (a *app) serverSettings(c *ui.Context) {
 	t := c.Theme()
 	settingsCard(c, func() {
@@ -261,6 +261,64 @@ func (a *app) serverSettings(c *ui.Context) {
 			bin = "Not found. Install it with: " + hc.InstallCommand
 		}
 		ui.Text(c, bin).FontSize(t.FontSize-1).TextColor(t.TextMuted).Selectable().Padding(0, 0, t.Space(2.5), 0)
+	})
+	// No list of machines, but an empty one, while connected to a core
+	// that has them.
+	if a.machines != nil {
+		a.machineSettings(c)
+	}
+}
+
+// machineSettings lists the machines the core added, each with its state,
+// its host and its hc: one not connected says why, with a button
+// connecting to it now, and one waiting for a login the command logging
+// in, which asks in a terminal.
+func (a *app) machineSettings(c *ui.Context) {
+	t := c.Theme()
+	settingsCard(c, func() {
+		settingsRow(c, "Machines", "Other machines herdr-core reaches over ssh. Add one in a terminal: hc machine add <ssh-target>.", func() {})
+		for _, m := range a.machines {
+			connected := m.State == "connected"
+			dot := t.Danger
+			switch m.State {
+			case "connected":
+				dot = t.Success
+			case "connecting":
+				dot = t.Warning
+			}
+			ui.Row(c.Key("machine "+m.Name)).AlignItems(ui.Center).Gap(t.Space(3)).Padding(t.Space(2.5), 0).Children(func() {
+				ui.Box(c).Size(8, 8).Shrink(0).Radius(4).Background(dot)
+				ui.Column(c).Grow(1).MinWidth(0).Gap(t.Space(0.5)).Children(func() {
+					ui.Text(c, m.Name).Bold()
+					detail := []string{strings.ReplaceAll(m.State, "_", " ")}
+					if m.Host != "" {
+						detail = append(detail, m.Host)
+					}
+					if m.Version != "" {
+						detail = append(detail, "hc "+m.Version)
+					}
+					if m.Temporary {
+						detail = append(detail, "temporary")
+					}
+					ui.Text(c, strings.Join(detail, " · ")).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+					if !connected && m.Why != "" {
+						ui.Text(c, m.Why).FontSize(t.FontSize - 1).TextColor(t.Danger).Selectable()
+					}
+					if m.State == "needs_login" {
+						ui.Text(c, "hc machine login "+m.Name).FontSize(t.FontSize - 1).Font("monospace").Selectable()
+					}
+				})
+				if !connected {
+					label := "Connect"
+					if a.dialing[m.Name] {
+						label = "Connecting…"
+					}
+					if ui.Button(c.Key("connect"), label).Disabled(a.dialing[m.Name]).Clicked() {
+						a.dial(m.Name)
+					}
+				}
+			})
+		}
 	})
 }
 

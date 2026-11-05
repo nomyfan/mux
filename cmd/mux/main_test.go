@@ -713,3 +713,37 @@ func TestMachineErrorClears(t *testing.T) {
 		t.Error("another error went")
 	}
 }
+
+// The server settings list the core's machines, each with its state, host
+// and hc; one not connected says why, with a button connecting to it, and
+// one waiting for a login the command logging in. A core without machines
+// has no list.
+func TestMachineSettings(t *testing.T) {
+	a := newApp(layout.Layout{})
+	tt := ui.NewTester(a.view, 1200, 900)
+	tt.Key(ui.Cmd, ui.KeyComma)
+	if tt.HasText("Machines") {
+		t.Errorf("a list of machines without any: %q", tt.Texts())
+	}
+	a.machines = []hc.Machine{
+		{Name: "windows", Host: "win", Version: "0.1.18", State: "connected"},
+		{Name: "rohan", Host: "rohan", Version: "0.1.17", State: "unreachable", Why: "cannot reach rohan: timed out"},
+		{Name: "box", Host: "box", Version: "0.1.18", State: "needs_login", Temporary: true},
+	}
+	tt.Frame()
+	for _, text := range []string{"Machines", "windows", "connected · win · hc 0.1.18", "unreachable · rohan · hc 0.1.17",
+		"cannot reach rohan: timed out", "needs login · box · hc 0.1.18 · temporary", "hc machine login box"} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	n := 0
+	for _, text := range tt.Texts() {
+		if text == "Connect" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d Connect buttons, want one for each machine not connected", n)
+	}
+}
