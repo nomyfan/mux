@@ -180,6 +180,37 @@ func (a *app) setMachines(ms []hc.Machine) {
 	}
 }
 
+// dial connects to a machine now, as the user asked, rather than at its
+// next retry; what it says of itself then shows at once.
+func (a *app) dial(name string) {
+	conn := a.conn
+	if conn == nil || a.dialing[name] {
+		return
+	}
+	if a.dialing == nil {
+		a.dialing = map[string]bool{}
+	}
+	a.dialing[name] = true
+	go func() {
+		m, err := conn.ConnectMachine(name)
+		a.update(func() {
+			delete(a.dialing, name)
+			if a.conn != conn {
+				return
+			}
+			if err != nil {
+				a.serverErr = err.Error()
+				return
+			}
+			ms := slices.Clone(a.machines)
+			if i := slices.IndexFunc(ms, func(old hc.Machine) bool { return old.Name == name }); i >= 0 {
+				ms[i] = m
+				a.setMachines(ms)
+			}
+		})
+	}()
+}
+
 // machine returns the machine the core calls name, if it has one.
 func (a *app) machine(name string) (hc.Machine, bool) {
 	for _, m := range a.machines {

@@ -257,10 +257,14 @@ func TestMachineWithCore(t *testing.T) {
 	}
 	b.newTabHere()
 	pump(b, "error starting a terminal there", func() bool { return b.err != "" })
+	b.openSettings()
+	pump(b, "machine in the settings", func() bool { return b.tt.HasText("fake") && b.tt.HasText("Connect") })
+	b.settingsOpen = false
 
-	// Back, the pane attaches again, and the error goes.
+	// Back, as the user connects to it, the pane attaches again, and the
+	// error goes.
 	os.Remove(dir + "/down")
-	b.conn.Call("machine.connect", map[string]string{"machine": "fake"}, nil)
+	b.dial("fake")
 	pump(b, "machine back", func() bool {
 		tm, ok := b.terms.Find(remote)
 		return ok && tm.Live() && b.err == "" && !b.tt.HasText("unreachable")

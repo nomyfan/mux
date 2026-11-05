@@ -6,10 +6,14 @@ import "strings"
 // with the fields the client reads: its terminals are Name/t7.
 type Machine struct {
 	Name string `json:"name"`
-	Host string `json:"host"`
+	// Host is what its core calls itself, its hostname; Version that
+	// core's hc version, as last seen.
+	Host    string `json:"host"`
+	Version string `json:"version"`
 	// State is its line now: connecting, connected, needs_login or
-	// unreachable.
+	// unreachable; Why says why it is not connected.
 	State     string `json:"state"`
+	Why       string `json:"why,omitempty"`
 	Temporary bool   `json:"temporary,omitempty"`
 }
 
@@ -23,6 +27,14 @@ func (c *Conn) Machines() ([]Machine, error) {
 	}
 	err := c.Call("machine.list", nil, &r)
 	return r.Machines, err
+}
+
+// ConnectMachine dials a machine now rather than at its next retry, as
+// after a login, returning it as it is then.
+func (c *Conn) ConnectMachine(name string) (Machine, error) {
+	var m Machine
+	err := c.Call("machine.connect", map[string]string{"machine": name}, &m)
+	return m, err
 }
 
 // MachineOf returns the machine a terminal is on, by its address: "" for
