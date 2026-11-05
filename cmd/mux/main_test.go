@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -222,6 +223,36 @@ func TestCloseTabConfirms(t *testing.T) {
 	}
 	if c := a.closing; c == nil || len(c.terminals) != 1 || c.terminals[0] != "t1" {
 		t.Errorf("the menu's Close Tab… asks %+v", c)
+	}
+}
+
+// As the tab chosen closes, or the pane of the agent chosen, the tab shown
+// in its place shows chosen in the sidebar.
+func TestClosedTabLeavesShownChosen(t *testing.T) {
+	a := newApp(layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1"), tab("tab2", "t2"), tab("tab3", "t3")}},
+	}}, shell("t1", "/srv/api"), agent("t2", "/srv/web", "codex", "idle"), shell("t3", "/srv/db"))
+	tt := ui.NewTester(a.view, 1000, 600)
+	if a.chosen != "tab1" {
+		t.Fatalf("chose %q", a.chosen)
+	}
+	gone := func(address string) {
+		a.terms.List = slices.DeleteFunc(a.terms.List, func(t hc.Terminal) bool { return t.Address == address })
+		a.lay.Prune(a.live)
+		tt.Frame()
+	}
+	gone("t1")
+	if a.lay.Active != "tab2" || a.chosen != "tab2" {
+		t.Errorf("tab1 closed: showing %q, chosen %q", a.lay.Active, a.chosen)
+	}
+	a.showTerminal("t2")
+	tt.Frame()
+	if a.chosen != "t2" {
+		t.Fatalf("choosing the agent chose %q", a.chosen)
+	}
+	gone("t2")
+	if a.lay.Active != "tab3" || a.chosen != "tab3" {
+		t.Errorf("the agent's pane closed: showing %q, chosen %q", a.lay.Active, a.chosen)
 	}
 }
 

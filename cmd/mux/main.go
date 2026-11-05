@@ -258,7 +258,9 @@ func (a *app) sidebar(c *ui.Context) {
 	band := a.titleBand(c)
 	ui.Box(c).Height(band).Shrink(0).DragWindow()
 	a.newWorkspaceButton(c).Absolute().Right(c.Theme().Space(1)).Top((band - 24) / 2)
-	if _, t := a.lay.ActiveTab(); t != nil && a.chosen == "" {
+	// The item chosen is gone, as its tab closed or its agent's pane: the
+	// tab shown in its place is chosen.
+	if _, t := a.lay.ActiveTab(); t != nil && !a.choosable(a.chosen) {
 		a.chosen = t.ID
 	}
 	ui.Sidebar(c, &a.chosen, func() {
@@ -291,6 +293,16 @@ func (a *app) sidebar(c *ui.Context) {
 			a.closing = nil
 		}
 	}
+}
+
+// choosable reports whether the sidebar can show an item chosen: a tab of
+// the layout, or an agent with a pane.
+func (a *app) choosable(id string) bool {
+	if _, t := a.lay.Tab(id); t != nil {
+		return true
+	}
+	_, t, _ := a.lay.Find(id)
+	return t != nil
 }
 
 // machineErr is an error, msg, of a machine's.
