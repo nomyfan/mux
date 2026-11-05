@@ -69,6 +69,9 @@ type RunOptions struct {
 	// NoParent starts it with no parent, though the client runs in a
 	// terminal of the core.
 	NoParent bool `json:"no_parent,omitempty"`
+	// On is the machine it runs on, "" for the core's own; there, no Cwd
+	// is its home.
+	On string `json:"on,omitempty"`
 }
 
 // Run starts a program in a new terminal, returning its record.

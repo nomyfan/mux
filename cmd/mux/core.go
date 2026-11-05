@@ -102,6 +102,7 @@ func (a *app) session(env []string) error {
 		return err
 	}
 	a.update(func() { a.connected(bin, conn, events, doc) })
+	go a.watchMachines(conn)
 	for {
 		ev, err := events.Next()
 		if err != nil {
@@ -114,6 +115,33 @@ func (a *app) session(env []string) error {
 		if first {
 			a.update(a.receive)
 		}
+	}
+}
+
+// machinesEvery is how often the app asks the core for its machines,
+// which it tells no events of.
+const machinesEvery = 5 * time.Second
+
+// watchMachines keeps the machines the core added as a.machines while
+// conn lasts, on a core that has machines: a call that fails otherwise,
+// as one that times out, is tried again at the next turn.
+func (a *app) watchMachines(conn *hc.Conn) {
+	if !slices.Contains(conn.Hello.Methods, "machine.list") {
+		return
+	}
+	for {
+		ms, err := conn.Machines()
+		if errors.Is(err, hc.ErrLost) {
+			return
+		}
+		if err == nil {
+			a.update(func() {
+				if a.conn == conn {
+					a.machines = ms
+				}
+			})
+		}
+		time.Sleep(machinesEvery)
 	}
 }
 
@@ -136,7 +164,7 @@ func (a *app) disconnected(why string) {
 	if a.conn != nil {
 		a.conn.Close()
 	}
-	a.conn, a.err, a.saving, a.dirty = nil, why, false, false
+	a.conn, a.machines, a.err, a.saving, a.dirty = nil, nil, why, false, false
 	if a.stopped() {
 		a.err = ""
 	}
@@ -316,19 +344,25 @@ func terminalEnv(env []string) map[string]string {
 	return vars
 }
 
-// run starts a shell in a new terminal, in cwd, "" for the user's home
-// (the core's choice would be where it started, "/" from the Finder), and
+// run starts a shell in a new terminal on a machine, "" for the core's
+// own, in cwd, "" for the user's home (the core's choice would be where it
+// started, "/" from the Finder; on another machine, it is the home), and
 // gives its address to done once it runs.
-func (a *app) run(cwd string, done func(address string)) {
+func (a *app) run(machine, cwd string, done func(address string)) {
 	conn, gen := a.conn, a.gen
 	if conn == nil {
 		return
 	}
-	if cwd == "" {
+	env := terminalEnv(a.env)
+	if machine != "" {
+		// The app's locale tells nothing of another machine's, which may
+		// lack UTF-8's.
+		delete(env, "LANG")
+	} else if cwd == "" {
 		cwd, _ = os.UserHomeDir()
 	}
 	go func() {
-		t, err := conn.Run(hc.RunOptions{Cwd: cwd, Env: terminalEnv(a.env), Labels: map[string]string{"mux": "1"}, Keep: true, NoParent: true})
+		t, err := conn.Run(hc.RunOptions{Cwd: cwd, Env: env, Labels: map[string]string{"mux": "1"}, Keep: true, NoParent: true, On: machine})
 		a.update(func() {
 			if gen != a.gen {
 				return
@@ -363,8 +397,14 @@ func (a *app) kill(addresses ...string) {
 	}()
 }
 
+// runBeside starts a shell as run does, beside a terminal: on its machine,
+// where its program is; for none, on the core's own, in the user's home.
+func (a *app) runBeside(address string, done func(address string)) {
+	a.run(hc.MachineOf(address), a.cwdOf(address), done)
+}
+
 // cwdOf returns where a new terminal beside a terminal starts: where its
-// program is now, else where it started; "" for none.
+// program is now, else where it started, on its machine; "" for none.
 func (a *app) cwdOf(address string) string {
 	t, ok := a.terms.Find(address)
 	if !ok {
@@ -386,12 +426,12 @@ func (a *app) focusedTerminal() string {
 }
 
 // newTab makes a tab in a workspace and shows it, giving its pane the
-// keyboard: it starts where the focused pane's program is.
+// keyboard: it starts where the focused pane's program is, on its machine.
 func (a *app) newTab(workspaceID string) {
 	if a.lay.Workspace(workspaceID) == nil {
 		return
 	}
-	a.run(a.cwdOf(a.focusedTerminal()), func(addr string) {
+	a.runBeside(a.focusedTerminal(), func(addr string) {
 		ws := a.lay.Workspace(workspaceID)
 		if ws == nil {
 			ws, _ = a.lay.AddWorkspace(addr)
@@ -405,10 +445,24 @@ func (a *app) newTab(workspaceID string) {
 
 // newWorkspace makes a workspace and shows it, as newTab does a tab.
 func (a *app) newWorkspace() {
-	a.run(a.cwdOf(a.focusedTerminal()), func(addr string) {
-		a.lay.AddWorkspace(addr)
-		a.shown()
-	})
+	a.runBeside(a.focusedTerminal(), a.addWorkspace)
+}
+
+// newWorkspaceOn makes a workspace on a machine, "" for the core's own:
+// where the focused pane's program is if it is on that machine, else in
+// the home.
+func (a *app) newWorkspaceOn(machine string) {
+	if focused := a.focusedTerminal(); hc.MachineOf(focused) == machine {
+		a.runBeside(focused, a.addWorkspace)
+	} else {
+		a.run(machine, "", a.addWorkspace)
+	}
+}
+
+// addWorkspace shows a new workspace of a terminal.
+func (a *app) addWorkspace(address string) {
+	a.lay.AddWorkspace(address)
+	a.shown()
 }
 
 // split splits a terminal's pane, the new one, focused, going right of it
@@ -419,7 +473,7 @@ func (a *app) split(address string, d layout.Direction) {
 		return
 	}
 	id := tab.ID
-	a.run(a.cwdOf(address), func(addr string) {
+	a.runBeside(address, func(addr string) {
 		if _, tab := a.lay.Tab(id); tab != nil && tab.Split(address, addr, d) {
 			tab.Zoomed = false
 			a.shown()
