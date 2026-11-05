@@ -19,8 +19,8 @@ import (
 // app they report (OSC 7501's app), and agentMarks the files of their
 // marks in icons/agents.
 var (
-	agentNames = map[string]string{"claude-code": "Claude Code", "codex": "Codex"}
-	agentMarks = map[string]string{"claude-code": "claude", "claude": "claude", "codex": "codex"}
+	agentNames = map[string]string{"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi"}
+	agentMarks = map[string]string{"claude-code": "claude", "codex": "codex", "pi": "pi"}
 )
 
 // agent returns what a terminal's program reports of itself, if it does:

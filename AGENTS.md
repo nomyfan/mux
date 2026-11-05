@@ -78,7 +78,7 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 
 ### `cmd/mux/icons`
 
-- `agents/`: agent marks as SVGs (currently Claude Code and Codex only), embedded at build time; `agentMarks` maps the `app` agents report to them. Agents without a mark get a generic icon.
+- `agents/`: agent marks as SVGs (currently Claude Code, Codex and Pi only), embedded at build time; `agentMarks` maps the `app` agents report to them. Agents without a mark get a generic icon.
 - `app.png`: the app icon for use inside the app, embedded at build time: the Dock icon's tile at 256px, without its margin and drop shadow, which would show as gray corners in the UI. `scripts/make-icon.sh` renders it together with `resources/icon.png`.
 - `appearance.svg`, `terminal.svg`: the Appearance and Terminal pages' icons in the settings sidebar, on the dark tile of `app.png`: System Settings' appearance mark (a ringed circle half light and half dark, around a smaller one the other way round) in cream as the app icon's art, and a prompt in Vellum's green.
 - `appearance-light.svg`, `appearance-dark.svg`, `appearance-auto.svg`: the Appearance page's choices, the window drawn small in Vellum's light and dark colors, Auto's split along the diagonal as the README's screenshot is. `scripts/make-appearance-previews.sh` writes them; change them there.
