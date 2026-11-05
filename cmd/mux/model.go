@@ -224,7 +224,8 @@ func (a *app) branchOf(address string) string {
 	}
 	ttl, conn, read := branchTTL, a.conn, readFrom(dir)
 	if machine != "" {
-		if conn == nil {
+		// Away, the machine keeps the branch last read.
+		if conn == nil || a.machineDown(machine) != "" {
 			return b.name
 		}
 		ttl = remoteBranchTTL

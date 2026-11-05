@@ -91,6 +91,14 @@ func (a *app) session(env []string) error {
 		time.Sleep(4 * time.Second)
 		return err
 	}
+	// The machines before the terminals: those of a machine not connected
+	// then are missing from them, and must not be taken for gone (live).
+	var machines []hc.Machine
+	if hasMachines(conn) {
+		if machines, err = conn.Machines(); err != nil {
+			return err
+		}
+	}
 	events, err := conn.Subscribe()
 	if err != nil {
 		return err
@@ -101,7 +109,7 @@ func (a *app) session(env []string) error {
 	if err != nil {
 		return err
 	}
-	a.update(func() { a.connected(bin, conn, events, doc) })
+	a.update(func() { a.connected(bin, conn, machines, events, doc) })
 	go a.watchMachines(conn)
 	for {
 		ev, err := events.Next()
@@ -122,14 +130,21 @@ func (a *app) session(env []string) error {
 // which it tells no events of.
 const machinesEvery = 5 * time.Second
 
+// hasMachines reports whether a core has machines: one without lists
+// none.
+func hasMachines(conn *hc.Conn) bool {
+	return slices.Contains(conn.Hello.Methods, "machine.list")
+}
+
 // watchMachines keeps the machines the core added as a.machines while
 // conn lasts, on a core that has machines: a call that fails otherwise,
 // as one that times out, is tried again at the next turn.
 func (a *app) watchMachines(conn *hc.Conn) {
-	if !slices.Contains(conn.Hello.Methods, "machine.list") {
+	if !hasMachines(conn) {
 		return
 	}
 	for {
+		time.Sleep(machinesEvery)
 		ms, err := conn.Machines()
 		if errors.Is(err, hc.ErrLost) {
 			return
@@ -137,19 +152,59 @@ func (a *app) watchMachines(conn *hc.Conn) {
 		if err == nil {
 			a.update(func() {
 				if a.conn == conn {
-					a.machines = ms
+					a.setMachines(ms)
 				}
 			})
 		}
-		time.Sleep(machinesEvery)
 	}
+}
+
+// setMachines takes the machines as they are now. The panes of a machine
+// back attach again, as those that tried while it was away could not;
+// and it clears the error of a terminal it could not start.
+func (a *app) setMachines(ms []hc.Machine) {
+	var back []string
+	for _, m := range ms {
+		if m.State == "connected" && a.machineDown(m.Name) != "" {
+			back = append(back, m.Name)
+		}
+	}
+	a.machines = ms
+	for _, term := range a.lay.Terminals() {
+		if slices.Contains(back, hc.MachineOf(term)) {
+			a.term.Drop(term)
+		}
+	}
+	if a.err != "" && a.err == a.machineErr.msg && a.machineDown(a.machineErr.machine) == "" {
+		a.err = ""
+	}
+}
+
+// machine returns the machine the core calls name, if it has one.
+func (a *app) machine(name string) (hc.Machine, bool) {
+	for _, m := range a.machines {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return hc.Machine{}, false
+}
+
+// machineDown returns the state of a machine the core has but can't reach
+// now, as unreachable or needs login; "" for one connected, for one it
+// doesn't have, and for its own.
+func (a *app) machineDown(name string) string {
+	if m, ok := a.machine(name); ok && m.State != "connected" {
+		return strings.ReplaceAll(m.State, "_", " ")
+	}
+	return ""
 }
 
 // connected takes a new connection: the terminals as they are, and the
 // layout as the core keeps it, without the panes of terminals gone since.
-func (a *app) connected(bin string, conn *hc.Conn, events *hc.Events, doc hc.Doc) {
+func (a *app) connected(bin string, conn *hc.Conn, machines []hc.Machine, events *hc.Events, doc hc.Doc) {
 	a.bin, a.notInstalled, a.err, a.serverErr, a.starting = bin, false, "", "", false
-	a.conn, a.gen = conn, a.gen+1
+	a.conn, a.gen, a.machines = conn, a.gen+1, machines
 	a.terms = hc.Terminals{Seq: events.Seq, List: events.Terminals}
 	a.term.Reset()
 	a.adoptDoc(doc)
@@ -198,10 +253,14 @@ func (a *app) adoptDoc(doc hc.Doc) {
 	}
 }
 
-// live reports whether a terminal is live.
+// live reports whether a terminal is live. The core doesn't list the
+// terminals of a machine it can't reach, and tells no events of them as it
+// loses it: they are taken to be live till it is back, with their panes.
 func (a *app) live(address string) bool {
-	t, ok := a.terms.Find(address)
-	return ok && t.Live()
+	if t, ok := a.terms.Find(address); ok {
+		return t.Live()
+	}
+	return a.machineDown(hc.MachineOf(address)) != ""
 }
 
 // receive takes the events the connection queued, on the main thread.
@@ -369,6 +428,9 @@ func (a *app) run(machine, cwd string, done func(address string)) {
 			}
 			if err != nil {
 				a.err = err.Error()
+				if hc.Kind(err) == "unavailable" {
+					a.machineErr = machineErr{machine, a.err}
+				}
 				return
 			}
 			a.terms.Put(t)
