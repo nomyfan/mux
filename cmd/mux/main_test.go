@@ -656,3 +656,60 @@ func TestNewWorkspaceMenu(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// The core lists no terminal of a machine it can't reach: their panes stay
+// till it is back, and their headers say it is away. A machine connected,
+// or one the core no longer has, lists all its terminals: one missing is
+// gone.
+func TestMachineAway(t *testing.T) {
+	l := func() layout.Layout {
+		return layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+			{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1", "windows/t3")}},
+		}}
+	}
+	for _, c := range []struct {
+		machines []hc.Machine
+		kept     bool
+	}{
+		{[]hc.Machine{{Name: "windows", State: "unreachable"}}, true},
+		{[]hc.Machine{{Name: "windows", State: "connected"}}, false},
+		{nil, false},
+	} {
+		a := newApp(l(), shell("t1", "/srv"))
+		a.machines = c.machines
+		a.lay.Prune(a.live)
+		if kept := len(a.lay.Terminals()) == 2; kept != c.kept {
+			t.Errorf("machines %+v: kept %v, want %v", c.machines, kept, c.kept)
+		}
+	}
+
+	a := newApp(l(), shell("t1", "/srv"))
+	a.machines = []hc.Machine{{Name: "windows", State: "needs_login"}}
+	tt := ui.NewTester(a.view, 1000, 600)
+	if !tt.HasText("needs login") {
+		t.Errorf("no machine state in %q", tt.Texts())
+	}
+}
+
+// An error of a machine that could not start a terminal goes as the
+// machine is back; another error stays.
+func TestMachineErrorClears(t *testing.T) {
+	a := newApp(layout.Layout{})
+	down := []hc.Machine{{Name: "windows", State: "unreachable"}}
+	up := []hc.Machine{{Name: "windows", State: "connected"}}
+	a.err = "terminal.run: windows is unreachable"
+	a.machineErr = machineErr{"windows", a.err}
+	a.setMachines(down)
+	if a.err == "" {
+		t.Fatal("the error went while the machine is away")
+	}
+	a.setMachines(up)
+	if a.err != "" {
+		t.Errorf("error %q once the machine is back", a.err)
+	}
+	a.err = "saving the layout: conflict"
+	a.setMachines(up)
+	if a.err == "" {
+		t.Error("another error went")
+	}
+}

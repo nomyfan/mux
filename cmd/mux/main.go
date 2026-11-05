@@ -47,6 +47,9 @@ type app struct {
 	terms    hc.Terminals
 	machines []hc.Machine
 	err      string
+	// machineErr is the error of a terminal a machine could not start, as
+	// it was unreachable, which goes as the machine is back.
+	machineErr machineErr
 	// lay is the layout, as of the document's layVersion; saving while a
 	// write of it goes, dirty while it changed since.
 	lay        layout.Layout
@@ -285,6 +288,9 @@ func (a *app) sidebar(c *ui.Context) {
 		}
 	}
 }
+
+// machineErr is an error, msg, of a machine's.
+type machineErr struct{ machine, msg string }
 
 // localMachine names the core's own machine among the others.
 var localMachine = map[bool]string{true: "This Mac", false: "This Computer"}[runtime.GOOS == "darwin"]
@@ -897,6 +903,10 @@ func (a *app) paneTitle(c *ui.Context, terminal string, focused, grip bool) {
 		statusDot(c, a.state(terminal))
 	}
 	ui.Text(c, a.dirOf(terminal)).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
+	// What is typed while its machine is away is lost: the header says so.
+	if down := a.machineDown(hc.MachineOf(terminal)); down != "" {
+		ui.Text(c, down).TextColor(t.Danger).SingleLine().Shrink(0)
+	}
 	if branch := a.branchOf(terminal); branch != "" {
 		ui.Icon(c, branchIcon).Size(14, 14).TextColor(t.TextMuted)
 		ui.Text(c, branch).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
