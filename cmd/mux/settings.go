@@ -237,8 +237,8 @@ func settingsRow(c *ui.Context, label, description string, control func()) {
 	})
 }
 
-// serverSettings shows whether herdr-core runs, with a button starting or
-// stopping it, and where the app finds it; then the core's machines.
+// serverSettings shows whether herdr-core runs, where the app finds its hc,
+// and a button starting or stopping it; then the core's machines.
 func (a *app) serverSettings(c *ui.Context) {
 	t := c.Theme()
 	settingsCard(c, func() {
@@ -247,6 +247,11 @@ func (a *app) serverSettings(c *ui.Context) {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(t.Space(0.5)).Children(func() {
 				ui.Text(c, "herdr-core").Bold()
 				ui.Text(c, a.serverStatus()).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+				bin := a.bin
+				if bin == "" {
+					bin = "Not found. Install it with: " + hc.InstallCommand
+				}
+				ui.Text(c, bin).FontSize(t.FontSize - 1).TextColor(t.TextMuted).Selectable()
 			})
 			a.serverButton(c)
 		})
@@ -254,14 +259,6 @@ func (a *app) serverSettings(c *ui.Context) {
 	if a.serverErr != "" {
 		ui.Text(c, a.serverErr).FontSize(12).TextColor(t.Danger)
 	}
-	settingsCard(c, func() {
-		settingsRow(c, "Command", "The hc the app runs to connect to the core.", func() {})
-		bin := a.bin
-		if bin == "" {
-			bin = "Not found. Install it with: " + hc.InstallCommand
-		}
-		ui.Text(c, bin).FontSize(t.FontSize-1).TextColor(t.TextMuted).Selectable().Padding(0, 0, t.Space(2.5), 0)
-	})
 	// No list of machines, but an empty one, while connected to a core
 	// that has them.
 	if a.machines != nil {
