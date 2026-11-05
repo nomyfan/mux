@@ -119,3 +119,29 @@ func TestCore(t *testing.T) {
 		t.Errorf("stale write: %v", err)
 	}
 }
+
+// A core with no machines added lists none, says so of one named, and
+// reads its own files by a path from a folder.
+func TestMachines(t *testing.T) {
+	c := isolatedCore(t)
+	ms, err := c.Machines()
+	if err != nil || len(ms) != 0 {
+		t.Fatalf("machines %+v %v", ms, err)
+	}
+	if _, err := c.Run(RunOptions{On: "nowhere", NoParent: true}); Kind(err) != "machine_unknown" {
+		t.Errorf("run on an unknown machine: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/HEAD", []byte("ref: refs/heads/main\nmore\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir+"/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if text, err := c.ReadFile("", dir+"/sub", "../HEAD", 1); err != nil || text != "ref: refs/heads/main\n" {
+		t.Errorf("read %q %v", text, err)
+	}
+	if _, err := c.ReadFile("", dir, "sub", 1); err == nil {
+		t.Error("read a folder")
+	}
+}

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,9 +579,50 @@ func TestGitBranch(t *testing.T) {
 	for _, c := range []struct{ dir, want string }{
 		{dir + "/repo/src", "main"}, {dir + "/wt", "0123456"}, {dir, ""},
 	} {
-		if got := gitBranch(c.dir); got != c.want {
+		if got := gitBranch(c.dir, readFrom(c.dir)); got != c.want {
 			t.Errorf("gitBranch(%s) = %q, want %q", c.dir, got, c.want)
 		}
+	}
+}
+
+// On another machine, as Windows, the branch is read by paths from the
+// folder, which the core resolves there, up to the root and no further.
+func TestRemoteGitBranch(t *testing.T) {
+	for _, c := range []struct {
+		dir   string
+		files map[string]string
+		want  string
+		reads int
+	}{
+		{`C:\Users\me\repo\src`, map[string]string{"../.git/HEAD": "ref: refs/heads/dev\r\n"}, "dev", 3},
+		{`C:\wt`, map[string]string{".git": "gitdir: C:/repo/.git/worktrees/wt\n", "C:/repo/.git/worktrees/wt/HEAD": "0123456789abcdef\n"}, "0123456", 3},
+		{`C:\Users`, nil, "", 6},
+	} {
+		reads := 0
+		read := func(path string) ([]byte, error) {
+			reads++
+			if data, ok := c.files[path]; ok {
+				return []byte(data), nil
+			}
+			return nil, os.ErrNotExist
+		}
+		if got := gitBranch(c.dir, read); got != c.want || reads != c.reads {
+			t.Errorf("gitBranch(%s) = %q in %d reads, want %q in %d", c.dir, got, reads, c.want, c.reads)
+		}
+	}
+}
+
+// A terminal of another machine's shows where it is after the machine's
+// name, and its workspace is called after its folder there.
+func TestRemoteNames(t *testing.T) {
+	a := newApp(layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "windows/t3")}},
+	}}, shell("windows/t3", `C:\Users\me\proj`))
+	if got := a.dirOf("windows/t3"); got != `windows:C:\Users\me\proj` {
+		t.Errorf("dirOf = %q", got)
+	}
+	if got := a.workspaceName(a.lay.Workspaces[0]); got != "windows:proj" {
+		t.Errorf("workspaceName = %q", got)
 	}
 }
 
@@ -590,5 +633,26 @@ func TestTerminalEnv(t *testing.T) {
 	}
 	if got, ok := terminalEnv([]string{"LC_CTYPE=de_DE.UTF-8"})["LANG"]; ok {
 		t.Errorf("with a locale, LANG %q", got)
+	}
+}
+
+// With other machines added, the sidebar's New Workspace button offers
+// them, those not connected disabled with their state.
+func TestNewWorkspaceMenu(t *testing.T) {
+	a := newApp(layout.Layout{})
+	a.machines = []hc.Machine{{Name: "windows", State: "connected"}, {Name: "rohan", State: "needs_login"}}
+	tt := ui.NewTester(a.view, 1000, 600)
+	if err := tt.Click("New Workspace"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{localMachine, "-", "windows", "rohan (needs login)"}
+	if got := tt.Menu(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("menu %q, want %q", got, want)
+	}
+	if err := tt.ChooseMenuItem("rohan (needs login)"); err == nil {
+		t.Error("chose a machine that is not connected")
+	}
+	if err := tt.ChooseMenuItem("windows"); err != nil {
+		t.Error(err)
 	}
 }

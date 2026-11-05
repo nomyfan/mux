@@ -41,11 +41,12 @@ type app struct {
 	serverErr string
 	// conn is the connection to the core, nil while there is none; gen
 	// counts connections, so that what an old one answers is dropped.
-	// terms are its terminals.
-	conn  *hc.Conn
-	gen   int
-	terms hc.Terminals
-	err   string
+	// terms are its terminals, machines the other machines it added.
+	conn     *hc.Conn
+	gen      int
+	terms    hc.Terminals
+	machines []hc.Machine
+	err      string
 	// lay is the layout, as of the document's layVersion; saving while a
 	// write of it goes, dirty while it changed since.
 	lay        layout.Layout
@@ -247,7 +248,9 @@ func (a *app) view(c *ui.Context) {
 // sidebar is the workspaces' tabs, and the agents, under the room the
 // window controls take.
 func (a *app) sidebar(c *ui.Context) {
-	ui.Box(c).Height(a.titleBand(c)).Shrink(0).DragWindow()
+	band := a.titleBand(c)
+	ui.Box(c).Height(band).Shrink(0).DragWindow()
+	a.newWorkspaceButton(c).Absolute().Right(c.Theme().Space(1)).Top((band - 24) / 2)
 	if _, t := a.lay.ActiveTab(); t != nil && a.chosen == "" {
 		a.chosen = t.ID
 	}
@@ -281,6 +284,37 @@ func (a *app) sidebar(c *ui.Context) {
 			a.closing = nil
 		}
 	}
+}
+
+// localMachine names the core's own machine among the others.
+var localMachine = map[bool]string{true: "This Mac", false: "This Computer"}[runtime.GOOS == "darwin"]
+
+// newWorkspaceButton makes a workspace, as Command-N does; with other
+// machines added, it opens a menu of the machines to make it on, those
+// not connected disabled, with their state.
+func (a *app) newWorkspaceButton(c *ui.Context) ui.Element {
+	b := iconButton(c, "new-workspace", newTabIcon, "New Workspace")
+	if len(a.machines) == 0 {
+		if b.Clicked() {
+			a.newWorkspace()
+		}
+		return b
+	}
+	return b.Menu(func(m *ui.Menu) {
+		if m.Item(localMachine).Chosen() {
+			a.newWorkspaceOn("")
+		}
+		m.Separator()
+		for _, mc := range a.machines {
+			label, connected := mc.Name, mc.State == "connected"
+			if !connected {
+				label += " (" + strings.ReplaceAll(mc.State, "_", " ") + ")"
+			}
+			if m.Item(label).Disabled(!connected).Chosen() {
+				a.newWorkspaceOn(mc.Name)
+			}
+		}
+	})
 }
 
 // closing is a workspace or tab to close, by name, once the user confirms,

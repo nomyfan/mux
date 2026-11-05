@@ -99,9 +99,14 @@ func (a *app) paneName(address string) string {
 	return "shell"
 }
 
-// dirOf returns where a terminal's program is, ~ for home.
+// dirOf returns where a terminal's program is, ~ for home; on another
+// machine, after its name, as machine:path.
 func (a *app) dirOf(address string) string {
-	return tildePath(a.cwdOf(address))
+	dir := a.cwdOf(address)
+	if machine := hc.MachineOf(address); machine != "" && dir != "" {
+		return machine + ":" + dir
+	}
+	return tildePath(dir)
 }
 
 func tildePath(dir string) string {
@@ -119,6 +124,9 @@ func (a *app) workspaceName(ws *layout.Workspace) string {
 	}
 	if terms := ws.Terminals(); len(terms) > 0 {
 		if dir := a.cwdOf(terms[0]); dir != "" {
+			if machine := hc.MachineOf(terms[0]); machine != "" {
+				return machine + ":" + baseName(dir)
+			}
 			if home, _ := os.UserHomeDir(); dir == home {
 				return "~"
 			}
@@ -126,6 +134,24 @@ func (a *app) workspaceName(ws *layout.Workspace) string {
 		}
 	}
 	return "Workspace"
+}
+
+// baseName is the last name of a path of any machine's, Windows' too.
+func baseName(dir string) string {
+	names := strings.FieldsFunc(dir, isSeparator)
+	if len(names) == 0 {
+		return dir
+	}
+	return names[len(names)-1]
+}
+
+func isSeparator(r rune) bool { return r == '/' || r == '\\' }
+
+// absPath reports whether a path of any machine's is absolute: from the
+// root, or a Windows drive's.
+func absPath(p string) bool {
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) ||
+		len(p) > 2 && p[1] == ':' && isSeparator(rune(p[2]))
 }
 
 // tabNames returns the name a tab was given, if any, and what it shows
@@ -172,67 +198,100 @@ type branch struct {
 	reading bool
 }
 
-// branchTTL is how long a branch read stands.
-const branchTTL = 3 * time.Second
+// branchTTL is how long a branch read stands; on another machine, whose
+// files are a few round trips over ssh away, remoteBranchTTL.
+const (
+	branchTTL       = 3 * time.Second
+	remoteBranchTTL = 10 * time.Second
+)
 
 // branchOf returns the Git branch of the checkout a terminal's program is
-// in, as last read: it reads it again, off the main thread, once stale.
+// in, as last read: it reads it again, off the main thread, once stale;
+// on another machine, through the core.
 func (a *app) branchOf(address string) string {
-	dir := a.cwdOf(address)
+	machine, dir := hc.MachineOf(address), a.cwdOf(address)
 	if dir == "" {
 		return ""
 	}
 	if a.branches == nil {
 		a.branches = map[string]*branch{}
 	}
-	b := a.branches[dir]
+	key := machine + ":" + dir
+	b := a.branches[key]
 	if b == nil {
 		b = &branch{}
-		a.branches[dir] = b
+		a.branches[key] = b
 	}
-	if !b.reading && time.Since(b.read) > branchTTL && a.post != nil {
+	ttl, conn, read := branchTTL, a.conn, readFrom(dir)
+	if machine != "" {
+		if conn == nil {
+			return b.name
+		}
+		ttl = remoteBranchTTL
+		read = func(path string) ([]byte, error) {
+			text, err := conn.ReadFile(machine, dir, path, 1)
+			return []byte(text), err
+		}
+	}
+	if !b.reading && time.Since(b.read) > ttl && a.post != nil {
 		b.reading = true
 		go func() {
-			name := gitBranch(dir)
+			name := gitBranch(dir, read)
 			a.update(func() { b.name, b.read, b.reading = name, time.Now(), false })
 		}()
 	}
 	return b.name
 }
 
-// gitBranch reads the branch of the checkout dir is in, "" if none: a
-// detached HEAD shows its commit, short.
-func gitBranch(dir string) string {
-	for d := dir; ; d = filepath.Dir(d) {
-		git := filepath.Join(d, ".git")
-		if fi, err := os.Stat(git); err == nil {
-			if !fi.IsDir() {
-				// A worktree's .git names its directory.
-				data, err := os.ReadFile(git)
-				if err != nil {
-					return ""
-				}
-				rest, ok := bytes.CutPrefix(bytes.TrimSpace(data), []byte("gitdir: "))
-				if !ok {
-					return ""
-				}
-				git = string(rest)
-				if !filepath.IsAbs(git) {
-					git = filepath.Join(d, git)
-				}
+// gitBranch reads the branch of the checkout dir is in, "" if none, with
+// read, which reads a file by its path, absolute or from dir: a detached
+// HEAD shows its commit, short. The folders above dir are ../ from it, so
+// that a path of another machine's, as Windows', needs no parsing.
+func gitBranch(dir string, read func(path string) ([]byte, error)) string {
+	up := ""
+	// dir, and a folder above it for each of its names, up to the root.
+	for range len(strings.FieldsFunc(dir, isSeparator)) + 1 {
+		if head, err := read(up + ".git/HEAD"); err == nil {
+			return headBranch(head)
+		}
+		if data, err := read(up + ".git"); err == nil {
+			// A worktree's .git names its directory.
+			git, ok := bytes.CutPrefix(bytes.TrimSpace(data), []byte("gitdir: "))
+			if !ok {
+				return ""
 			}
-			head, err := os.ReadFile(filepath.Join(git, "HEAD"))
+			path := string(git) + "/HEAD"
+			if !absPath(path) {
+				path = up + path
+			}
+			head, err := read(path)
 			if err != nil {
 				return ""
 			}
-			head = bytes.TrimSpace(head)
-			if ref, ok := bytes.CutPrefix(head, []byte("ref: refs/heads/")); ok {
-				return string(ref)
-			}
-			return string(head[:min(len(head), 7)])
+			return headBranch(head)
 		}
-		if filepath.Dir(d) == d {
-			return ""
-		}
+		up += "../"
 	}
+	return ""
+}
+
+// readFrom reads a file of this machine's by its path, absolute or from
+// dir.
+func readFrom(dir string) func(path string) ([]byte, error) {
+	return func(path string) ([]byte, error) {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(dir, path)
+		}
+		return os.ReadFile(path)
+	}
+}
+
+// headBranch is the branch a HEAD file names; a detached one's commit,
+// short.
+func headBranch(head []byte) string {
+	head = bytes.TrimSpace(head)
+	if ref, ok := bytes.CutPrefix(head, []byte("ref: refs/heads/")); ok {
+		return string(ref)
+	}
+	return string(head[:min(len(head), 7)])
 }
