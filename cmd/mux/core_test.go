@@ -1,6 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -313,4 +319,99 @@ func TestMachineWithCore(t *testing.T) {
 	})
 	b.gate.stop()
 	b.conn.StopServer()
+}
+
+// A pane's labels go one change at a time, and the app looks at them again
+// as the core's events come, however they come together: a name the core
+// keeps other than the pane's, as another's change later than the app's,
+// is set again.
+func TestLabelsConverge(t *testing.T) {
+	toCore, fromApp := io.Pipe()
+	fromCore, toApp := io.Pipe()
+	core := bufio.NewReader(toCore)
+	go func() {
+		core.ReadBytes('\n')
+		io.WriteString(toApp, `{"jsonrpc":"2.0","id":0,"result":{"generation":1,"methods":["terminal.label"]}}`+"\n")
+	}()
+	conn, err := hc.Open(fromCore, fromApp, func() error { toApp.Close(); return fromApp.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// request reads the next call the app makes, replying to it.
+	request := func() string {
+		t.Helper()
+		var h [9]byte
+		if _, err := io.ReadFull(core, h[:]); err != nil {
+			t.Fatal(err)
+		}
+		p := make([]byte, binary.LittleEndian.Uint32(h[5:]))
+		io.ReadFull(core, p)
+		var req struct {
+			ID     uint64
+			Params struct{ Labels map[string]string }
+		}
+		json.Unmarshal(p, &req)
+		reply := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`, req.ID)
+		f := make([]byte, 9+len(reply))
+		binary.LittleEndian.PutUint32(f[5:], uint32(len(reply)))
+		copy(f[9:], reply)
+		toApp.Write(f)
+		return req.Params.Labels[layout.LabelPaneName]
+	}
+
+	ws := &layout.Workspace{ID: "w1", Tabs: []*layout.Tab{tab("t", "t1")}}
+	l := layout.Layout{Workspaces: []*layout.Workspace{ws}, Active: "w1"}
+	all := l.Labels()["t1"]
+	t1 := shell("t1", "/tmp")
+	t1.Labels = maps.Clone(all)
+	a := newApp(l, t1)
+	posted := make(chan func(), 16)
+	a.conn, a.post = conn, func(fn func()) { posted <- fn }
+	pane := ws.Tabs[0].Pane("t1")
+	run := func() {
+		t.Helper()
+		select {
+		case fn := <-posted:
+			fn()
+		case <-time.After(5 * time.Second):
+			t.Fatal("no answer")
+		}
+	}
+	// named returns the labels event of t1 named name.
+	seq := uint64(0)
+	named := func(name string) hc.Event {
+		labels := maps.Clone(all)
+		labels[layout.LabelPaneName] = name
+		data, _ := json.Marshal(map[string]any{"labels": labels})
+		seq++
+		return hc.Event{Method: "event", Seq: seq, Type: "labels", Terminal: "t1", Data: data}
+	}
+
+	pane.Name = "b"
+	a.label()
+	// Renamed again while the first change goes, it waits for its answer.
+	pane.Name = "c"
+	a.label()
+	if got := request(); got != "b" {
+		t.Fatalf("sent %q first, not b", got)
+	}
+	run()
+	if got := request(); got != "c" {
+		t.Fatalf("sent %q next, not c", got)
+	}
+	run()
+
+	// Its events come together with another's, later: the core keeps b.
+	a.inbox = []hc.Event{named("b"), named("c"), named("b")}
+	a.receive()
+	if got := request(); got != "c" {
+		t.Fatalf("sent %q again, not c", got)
+	}
+	run()
+	a.inbox = []hc.Event{named("c")}
+	a.receive()
+	if len(a.labeling) != 0 {
+		t.Errorf("still labeling %v", a.labeling)
+	}
 }

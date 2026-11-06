@@ -313,9 +313,12 @@ func (a *app) receive() {
 		}
 		a.terms.Apply(ev)
 		switch ev.Type {
+		case "created", "labels":
+			a.heardLabels(ev.Terminal)
 		case "restarted":
 			// A kept terminal's new shell: its pane attaches again.
 			a.term.Drop(ev.Terminal)
+			a.heardLabels(ev.Terminal)
 		case "status":
 			// A report other than done is news again; done again, as a
 			// program repeats itself, is not.
@@ -331,6 +334,9 @@ func (a *app) receive() {
 		}
 		if ev.Method == "missed" {
 			pruned = true
+			for address := range a.labeling {
+				a.heardLabels(address)
+			}
 		}
 	}
 	if pruned && a.lay.Prune(a.live) {
@@ -409,13 +415,23 @@ func (a *app) save() {
 	}()
 }
 
+// labelCall is a change of labels sent to a terminal (label).
+type labelCall struct {
+	change string
+	// going is set while the call goes; heard, as an event of the
+	// terminal's labels comes meanwhile.
+	going, heard bool
+}
+
 // label tells the panes' terminals where they are, by labels of the core
 // (layout.Labels), setting those that differ from what the core keeps:
 // at once, as the layout changes, rather than with its next write. A
 // terminal the core doesn't list now, as its machine is away, is labeled
-// as it lists it again. A change sent is not sent again while it goes, nor
-// after, as the core's event of it may come later than its answer; failed,
-// it is sent again at the next turn.
+// as it lists it again. A terminal's changes go one at a time, as calls
+// side by side could be kept in another order, and as one is answered the
+// labels are looked at again. A change answered is not sent again till an
+// event of the terminal's labels comes, as it may come later than the
+// answer; failed, it is sent again at the next turn.
 func (a *app) label() {
 	conn := a.conn
 	if conn == nil || !slices.Contains(conn.Hello.Methods, "terminal.label") {
@@ -424,6 +440,10 @@ func (a *app) label() {
 	for address, want := range a.lay.Labels() {
 		t, ok := a.terms.Find(address)
 		if !ok || !t.Live() {
+			continue
+		}
+		call := a.labeling[address]
+		if call != nil && call.going {
 			continue
 		}
 		change := map[string]string{}
@@ -438,25 +458,46 @@ func (a *app) label() {
 		}
 		// fmt prints a map by its sorted keys.
 		sent := fmt.Sprint(change)
-		if a.labeling[address] == sent {
+		if call != nil && call.change == sent {
 			continue
 		}
 		if a.labeling == nil {
-			a.labeling = map[string]string{}
+			a.labeling = map[string]*labelCall{}
 		}
-		a.labeling[address] = sent
+		call = &labelCall{change: sent, going: true}
+		a.labeling[address] = call
 		go func() {
-			if err := conn.Label(address, change); err != nil {
-				a.update(func() {
-					if a.conn == conn && a.labeling[address] == sent {
-						delete(a.labeling, address)
-					}
-				})
-			}
+			err := conn.Label(address, change)
+			a.update(func() {
+				// Gone with the connection or the pane.
+				if a.labeling[address] != call {
+					return
+				}
+				if err != nil || call.heard {
+					delete(a.labeling, address)
+				} else {
+					call.going = false
+				}
+				if err == nil {
+					a.label()
+				}
+			})
 		}()
 	}
 	for address := range a.labeling {
 		if _, _, n := a.lay.Find(address); n == nil {
+			delete(a.labeling, address)
+		}
+	}
+}
+
+// heardLabels takes an event of a terminal's labels: what the core keeps
+// is now in its record, a change answered or another's since.
+func (a *app) heardLabels(address string) {
+	if call := a.labeling[address]; call != nil {
+		if call.going {
+			call.heard = true
+		} else {
 			delete(a.labeling, address)
 		}
 	}
