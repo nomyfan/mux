@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
 	"mux/internal/hc"
@@ -762,8 +763,10 @@ func (a *app) newTabHere() {
 }
 
 // menu is macOS's standard menu bar with the File menu of fileCommands,
-// whose Command-W closes a tab rather than the window. The commands wait
-// while a dialog shows, as the view's shortcuts do.
+// whose Command-W closes a tab rather than the window, and a View menu
+// whose zoom items size the terminals' font, as the standard one's would
+// take their keys and do nothing in a native window. The File commands
+// wait while a dialog shows, as the view's shortcuts do.
 func (a *app) menu() *mygo.Menu {
 	var file []*mygo.MenuItem
 	for _, fc := range a.fileCommands() {
@@ -778,11 +781,24 @@ func (a *app) menu() *mygo.Menu {
 			})
 		}})
 	}
+	zoom := func(label, accel string, z terminal.Zoom) *mygo.MenuItem {
+		return &mygo.MenuItem{Label: label, Accelerator: accel, Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.update(func() { a.zoom(z) })
+		}}
+	}
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu},
 		{Label: "File", Submenu: file},
 		{Role: mygo.RoleEditMenu},
-		{Role: mygo.RoleViewMenu},
+		{Label: "View", Submenu: []*mygo.MenuItem{
+			{Role: mygo.RoleToggleDevTools},
+			mygo.Separator(),
+			zoom("Actual Size", "CmdOrCtrl+0", terminal.Zoom{Reset: true}),
+			zoom("Zoom In", "CmdOrCtrl+=", terminal.Zoom{Steps: 1}),
+			zoom("Zoom Out", "CmdOrCtrl+-", terminal.Zoom{Steps: -1}),
+			mygo.Separator(),
+			{Role: mygo.RoleToggleFullScreen},
+		}},
 		{Role: mygo.RoleWindowMenu},
 	})
 }
@@ -922,7 +938,7 @@ func (a *app) pane(c *ui.Context, titleLeft float32) {
 		}
 		a.paneHeader(c, tab, terminal, left, right, focused, focused || hovered)
 	}
-	hooks := term.Hooks{Header: header, Changed: a.changed,
+	hooks := term.Hooks{Header: header, Changed: a.changed, Zoom: a.zoom,
 		Title: func(c *ui.Context, terminal string) { a.paneTitle(c, terminal, false, false) }}
 	a.term.Build(c, tab, a.attacher(), hooks).Grow(1).MinWidth(0)
 	// The keyboard went to an agent's pane after the sidebar and its

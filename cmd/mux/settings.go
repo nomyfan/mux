@@ -538,6 +538,18 @@ func (a *app) setFontSize(size float64) {
 	a.applyFont()
 }
 
+// zoom steps the terminals' font size, or sets it back to the default, as
+// the zoom keys and the wheel with Command held ask, and shows it in the
+// settings' size control.
+func (a *app) zoom(z terminal.Zoom) {
+	size := float64(defaultFontSize)
+	if !z.Reset {
+		size = min(max(cmp.Or(a.settings.FontSize, defaultFontSize)+float64(z.Steps), minFontSize), maxFontSize)
+	}
+	a.fontSize = size
+	a.setFontSize(size)
+}
+
 // applyFont paints the terminals in the font the settings set, and saves
 // them.
 func (a *app) applyFont() {

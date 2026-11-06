@@ -312,3 +312,29 @@ func TestDropKeepsFocus(t *testing.T) {
 	tt.Type("x")
 	waitFor(t, tt, "input", func() bool { return core.stream("t1").Typed() == "x" })
 }
+
+// A pane's zoom goes to the app, which sizes all the terminals at once.
+// The keys stand for the wheel with Command held too, which reaches the
+// same hook in the plugin; the tester scrolls with no modifiers.
+func TestZoom(t *testing.T) {
+	core := &fakeCore{}
+	v, tab, changed := newView(), twoPanes(), 0
+	var zooms []terminal.Zoom
+	hooks := testHooks(v, &changed)
+	hooks.Zoom = func(z terminal.Zoom) { zooms = append(zooms, z) }
+	tt := ui.NewTester(func(c *ui.Context) { v.Build(c, tab, core, hooks).Fill() }, 800, 400)
+	waitFor(t, tt, "attach", func() bool { return core.stream("t1") != nil })
+	tt.Key(ui.Cmd, ui.KeyMinus)
+	tt.Key(ui.Cmd, ui.Key0)
+	tt.Frame()
+	want := []terminal.Zoom{{Steps: -1}, {Reset: true}}
+	if len(zooms) != len(want) {
+		t.Fatalf("zooms %v, not %v", zooms, want)
+	}
+	for i := range want {
+		if zooms[i] != want[i] {
+			t.Errorf("zooms %v, not %v", zooms, want)
+			break
+		}
+	}
+}

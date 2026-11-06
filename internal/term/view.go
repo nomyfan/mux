@@ -77,6 +77,10 @@ type Hooks struct {
 	// Changed tells the app the tab changed: the focus, a split's ratio,
 	// where the panes are.
 	Changed func()
+	// Zoom takes a terminal's zoom (its font size keys, the wheel with
+	// Command held), which then sizes all of them through SetFont; without
+	// it, a terminal zooms alone.
+	Zoom func(z terminal.Zoom)
 }
 
 // New returns a view of terminals in font, colored in light, or in dark
@@ -180,7 +184,14 @@ func (v *View) paneOf(addr string) *pane {
 	}
 	p := &pane{terminal: addr, conn: newConn(v.att, addr)}
 	term, err := terminal.New(terminal.Options{Conn: p.conn, Font: v.font, Theme: v.light, DarkTheme: v.dark,
-		OnSearch: func(s terminal.SearchStatus) { p.search.status = s }})
+		OnSearch: func(s terminal.SearchStatus) { p.search.status = s },
+		OnZoom: func(z terminal.Zoom) bool {
+			if v.hooks.Zoom == nil {
+				return false
+			}
+			v.hooks.Zoom(z)
+			return true
+		}})
 	if err != nil {
 		v.err = err.Error()
 		return nil
