@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -235,7 +236,7 @@ func (a *app) machineDown(name string) string {
 // layout as the core keeps it, without the panes of terminals gone since.
 func (a *app) connected(bin string, conn *hc.Conn, machines []hc.Machine, events *hc.Events, doc hc.Doc) {
 	a.bin, a.notInstalled, a.err, a.serverErr, a.starting = bin, false, "", "", false
-	a.conn, a.gen, a.machines = conn, a.gen+1, machines
+	a.conn, a.gen, a.machines, a.labeling = conn, a.gen+1, machines, nil
 	a.terms = hc.Terminals{Seq: events.Seq, List: events.Terminals}
 	a.term.Reset()
 	a.adoptDoc(doc)
@@ -250,7 +251,7 @@ func (a *app) disconnected(why string) {
 	if a.conn != nil {
 		a.conn.Close()
 	}
-	a.conn, a.machines, a.err, a.saving, a.dirty = nil, nil, why, false, false
+	a.conn, a.machines, a.err, a.saving, a.dirty, a.labeling = nil, nil, why, false, false, nil
 	if a.stopped() {
 		a.err = ""
 	}
@@ -282,6 +283,7 @@ func (a *app) adoptDoc(doc hc.Doc) {
 	if _, t := a.lay.ActiveTab(); t != nil {
 		a.chosen = t.ID
 	}
+	a.label()
 }
 
 // live reports whether a terminal is live. The core doesn't list the
@@ -335,6 +337,8 @@ func (a *app) receive() {
 		a.term.Retain(a.lay.Terminals())
 		a.save()
 	}
+	// Terminals back, as their machine is, or listed anew.
+	a.label()
 }
 
 // forget removes the record of a terminal of the app's that finished, as
@@ -365,6 +369,7 @@ func (a *app) reloadDoc() {
 // save writes the layout to the core, one write at a time: a change while
 // one goes writes again after it.
 func (a *app) save() {
+	a.label()
 	a.dirty = true
 	if a.saving || a.conn == nil {
 		return
@@ -402,6 +407,59 @@ func (a *app) save() {
 			}
 		})
 	}()
+}
+
+// label tells the panes' terminals where they are, by labels of the core
+// (layout.Labels), setting those that differ from what the core keeps:
+// at once, as the layout changes, rather than with its next write. A
+// terminal the core doesn't list now, as its machine is away, is labeled
+// as it lists it again. A change sent is not sent again while it goes, nor
+// after, as the core's event of it may come later than its answer; failed,
+// it is sent again at the next turn.
+func (a *app) label() {
+	conn := a.conn
+	if conn == nil || !slices.Contains(conn.Hello.Methods, "terminal.label") {
+		return
+	}
+	for address, want := range a.lay.Labels() {
+		t, ok := a.terms.Find(address)
+		if !ok || !t.Live() {
+			continue
+		}
+		change := map[string]string{}
+		for k, v := range want {
+			if t.Labels[k] != v {
+				change[k] = v
+			}
+		}
+		if len(change) == 0 {
+			delete(a.labeling, address)
+			continue
+		}
+		// fmt prints a map by its sorted keys.
+		sent := fmt.Sprint(change)
+		if a.labeling[address] == sent {
+			continue
+		}
+		if a.labeling == nil {
+			a.labeling = map[string]string{}
+		}
+		a.labeling[address] = sent
+		go func() {
+			if err := conn.Label(address, change); err != nil {
+				a.update(func() {
+					if a.conn == conn && a.labeling[address] == sent {
+						delete(a.labeling, address)
+					}
+				})
+			}
+		}()
+	}
+	for address := range a.labeling {
+		if _, _, n := a.lay.Find(address); n == nil {
+			delete(a.labeling, address)
+		}
+	}
 }
 
 // update runs fn on the main thread, as the window's Update does: post,

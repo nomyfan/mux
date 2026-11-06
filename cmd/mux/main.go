@@ -60,7 +60,10 @@ type app struct {
 	layVersion uint64
 	saving     bool
 	dirty      bool
-	branches   map[string]*branch
+	// labeling holds the change of labels sent to each pane's terminal
+	// (label), till the core keeps it.
+	labeling map[string]string
+	branches map[string]*branch
 	// seen holds the agents whose done the user has looked at (state).
 	seen map[string]bool
 	// chosen is the item the sidebar shows chosen: a tab, or an agent's

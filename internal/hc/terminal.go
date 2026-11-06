@@ -145,6 +145,11 @@ func (c *Conn) SetDoc(name string, value any, version uint64) (uint64, error) {
 	return r.Version, err
 }
 
+// Label sets labels of a terminal, removing those whose value is "".
+func (c *Conn) Label(address string, labels map[string]string) error {
+	return c.Call("terminal.label", map[string]any{"terminal": address, "labels": labels}, nil)
+}
+
 // StopServer stops the core and its programs; kept terminals get new
 // shells as it starts again.
 func (c *Conn) StopServer() error { return c.Call("server.stop", nil, nil) }

@@ -2,6 +2,7 @@ package layout
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"testing"
 )
@@ -194,5 +195,36 @@ func TestPruneRepair(t *testing.T) {
 	tb := broken.Workspaces[0].Tabs[0]
 	if tb.ID == "" || tb.Root.Terminal != "t1" || tb.Focus != "t1" {
 		t.Errorf("repaired tab %+v", tb)
+	}
+}
+
+// Each pane's terminal is labeled with its workspace's and tab's ids and
+// the names given; a name not given is a label to go.
+func TestLabels(t *testing.T) {
+	var l Layout
+	ws, tab := l.AddWorkspace("t1")
+	ws.Name = "api"
+	tab.Split("t1", "t2", Right)
+	tab.Pane("t2").Name = "tests"
+	other := l.AddTab(ws, "t3")
+	other.Name = "logs"
+	got := l.Labels()
+	want := map[string]map[string]string{
+		"t1": {LabelWorkspace: ws.ID, LabelWorkspaceName: "api", LabelTab: tab.ID, LabelTabName: "", LabelPaneName: ""},
+		"t2": {LabelWorkspace: ws.ID, LabelWorkspaceName: "api", LabelTab: tab.ID, LabelTabName: "", LabelPaneName: "tests"},
+		"t3": {LabelWorkspace: ws.ID, LabelWorkspaceName: "api", LabelTab: other.ID, LabelTabName: "logs", LabelPaneName: ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("labels %v", got)
+	}
+	for term, w := range want {
+		if !maps.Equal(got[term], w) {
+			t.Errorf("%s: labels %v, want %v", term, got[term], w)
+		}
+	}
+	// A tab moved to another workspace takes its labels along.
+	ws2, _ := l.AddWorkspace("t4")
+	if !l.MoveTab(other.ID, ws2.ID, "") || l.Labels()["t3"][LabelWorkspace] != ws2.ID {
+		t.Errorf("moved: labels %v", l.Labels()["t3"])
 	}
 }
