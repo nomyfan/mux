@@ -62,7 +62,7 @@ type app struct {
 	dirty      bool
 	// labeling holds the change of labels sent to each pane's terminal
 	// (label), till the core keeps it.
-	labeling map[string]string
+	labeling map[string]*labelCall
 	branches map[string]*branch
 	// seen holds the agents whose done the user has looked at (state).
 	seen map[string]bool
