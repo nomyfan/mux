@@ -109,6 +109,36 @@ func (l *Layout) ActiveTab() (*Workspace, *Tab) {
 	return nil, nil
 }
 
+// The labels a pane's terminal carries in the core, telling its program
+// where it is (hc get $HC_TERMINAL_ID): its workspace's and tab's ids,
+// which the layout keeps as they are renamed or the tab moves, and the
+// names the user gave them and the pane, without one none.
+const (
+	LabelWorkspace     = "mux.workspace"
+	LabelWorkspaceName = "mux.workspace.name"
+	LabelTab           = "mux.tab"
+	LabelTabName       = "mux.tab.name"
+	LabelPaneName      = "mux.pane.name"
+)
+
+// Labels returns the labels of each pane's terminal, by terminal: those
+// without a value are to go.
+func (l *Layout) Labels() map[string]map[string]string {
+	labels := map[string]map[string]string{}
+	for _, ws := range l.Workspaces {
+		for _, t := range ws.Tabs {
+			for _, n := range t.Leaves() {
+				labels[n.Terminal] = map[string]string{
+					LabelWorkspace: ws.ID, LabelWorkspaceName: ws.Name,
+					LabelTab: t.ID, LabelTabName: t.Name,
+					LabelPaneName: n.Name,
+				}
+			}
+		}
+	}
+	return labels
+}
+
 // AddWorkspace adds a workspace after the others, with a tab of a pane
 // showing terminal, and shows the tab.
 func (l *Layout) AddWorkspace(terminal string) (*Workspace, *Tab) {

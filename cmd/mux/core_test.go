@@ -113,6 +113,38 @@ func TestWithCore(t *testing.T) {
 		t.Fatalf("the core keeps %s, %v", doc.Value, err)
 	}
 
+	// The panes' terminals carry where they are, for their programs, and
+	// the names the user gives, which go as the user clears them.
+	labels := func(terminal string) map[string]string {
+		tm, _ := a.terms.Find(terminal)
+		return tm.Labels
+	}
+	ws, tab := a.lay.ActiveTab()
+	pump("labels", func() bool {
+		for _, term := range []string{first, second} {
+			l := labels(term)
+			if l[layout.LabelWorkspace] != ws.ID || l[layout.LabelTab] != tab.ID {
+				return false
+			}
+		}
+		return true
+	})
+	if _, ok := labels(first)[layout.LabelPaneName]; ok {
+		t.Errorf("a pane without a name has the label: %v", labels(first))
+	}
+	tab.Pane(second).Name, tab.Name = "tests", "work"
+	a.changed()
+	pump("name labels", func() bool {
+		l := labels(second)
+		return l[layout.LabelPaneName] == "tests" && l[layout.LabelTabName] == "work" && labels(first)[layout.LabelTabName] == "work"
+	})
+	tab.Pane(second).Name = ""
+	a.changed()
+	pump("name label gone", func() bool {
+		_, ok := labels(second)[layout.LabelPaneName]
+		return !ok
+	})
+
 	// Stopped from the settings, which have the keyboard, and started in
 	// place of the panes, the core comes back with its terminals, and the
 	// focused pane takes the keyboard again.
