@@ -311,20 +311,27 @@ type machineErr struct{ machine, msg string }
 // localMachine names the core's own machine among the others.
 var localMachine = map[bool]string{true: "This Mac", false: "This Computer"}[runtime.GOOS == "darwin"]
 
-// newWorkspaceButton makes a workspace, as Command-N does; with other
-// machines added, it opens a menu of the machines to make it on, those
-// not connected disabled, with their state.
+// newWorkspaceButton makes a workspace, as Command-N does, or one on a
+// machine, as machineButton offers them.
 func (a *app) newWorkspaceButton(c *ui.Context) ui.Element {
-	b := iconButton(c, "new-workspace", newTabIcon, "New Workspace")
+	return a.machineButton(c, "new-workspace", "New Workspace", a.newWorkspace, a.newWorkspaceOn)
+}
+
+// machineButton is an icon button, named label, making something: with
+// plain, or, with other machines added, with on, given the machine chosen
+// in the menu it opens ("" for the core's own), those not connected
+// disabled, with their state.
+func (a *app) machineButton(c *ui.Context, key, label string, plain func(), on func(machine string)) ui.Element {
+	b := iconButton(c, key, newTabIcon, label)
 	if len(a.machines) == 0 {
 		if b.Clicked() {
-			a.newWorkspace()
+			plain()
 		}
 		return b
 	}
 	return b.Menu(func(m *ui.Menu) {
 		if m.Item(localMachine).Chosen() {
-			a.newWorkspaceOn("")
+			on("")
 		}
 		m.Separator()
 		for _, mc := range a.machines {
@@ -333,7 +340,7 @@ func (a *app) newWorkspaceButton(c *ui.Context) ui.Element {
 				label += " (" + strings.ReplaceAll(mc.State, "_", " ") + ")"
 			}
 			if m.Item(label).Disabled(!connected).Chosen() {
-				a.newWorkspaceOn(mc.Name)
+				on(mc.Name)
 			}
 		}
 	})
@@ -504,9 +511,8 @@ func (a *app) workspaceHeader(c *ui.Context, ws *layout.Workspace, open bool) {
 			actions.Opacity(0)
 		}
 		actions.Children(func() {
-			if headerButton(c, "new-tab", newTabIcon, "New Tab") {
-				a.newTab(ws.ID)
-			}
+			a.machineButton(c, "new-tab", "New Tab", func() { a.newTab(ws.ID) },
+				func(machine string) { a.newTabOn(ws.ID, machine) })
 			iconButton(c, "more", moreIcon, "Workspace Actions").Menu(a.workspaceMenu(ws))
 			arrow, label := collapseIcon, "Collapse"
 			if !open {

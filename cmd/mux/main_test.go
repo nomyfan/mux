@@ -698,6 +698,64 @@ func TestNewWorkspaceMenu(t *testing.T) {
 	}
 }
 
+// With other machines added, a workspace's New Tab button offers them as
+// New Workspace does.
+func TestNewTabMenu(t *testing.T) {
+	a := newApp(layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1")}},
+	}}, shell("t1", "/srv"))
+	tt := ui.NewTester(a.view, 1000, 600)
+	if err := tt.Click("New Tab"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tt.Menu(); len(got) != 0 {
+		t.Errorf("a menu %q without machines", got)
+	}
+	a.machines = []hc.Machine{{Name: "windows", State: "connected"}, {Name: "rohan", State: "needs_login"}}
+	tt.Frame()
+	if err := tt.Click("New Tab"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{localMachine, "-", "windows", "rohan (needs login)"}
+	if got := tt.Menu(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("menu %q, want %q", got, want)
+	}
+	if err := tt.ChooseMenuItem("rohan (needs login)"); err == nil {
+		t.Error("chose a machine that is not connected")
+	}
+	if err := tt.ChooseMenuItem("windows"); err != nil {
+		t.Error(err)
+	}
+}
+
+// A new tab starts beside its workspace's focused pane, that of the tab
+// shown or else of its first tab, rather than the shown tab's of another
+// workspace; on another machine than that pane's, in that machine's home.
+func TestNewTabBeside(t *testing.T) {
+	a := newApp(layout.Layout{Active: "tab2", Workspaces: []*layout.Workspace{
+		{ID: "w1", Tabs: []*layout.Tab{tab("tab1", "t1"), tab("tab2", "t2")}},
+		{ID: "w2", Tabs: []*layout.Tab{tab("tab3", "windows/t3"), tab("tab4", "t4")}},
+	}}, shell("t1", "/srv"), shell("t2", "/src"), shell("windows/t3", `C:\proj`), shell("t4", "/tmp"))
+	w1, w2 := a.lay.Workspaces[0], a.lay.Workspaces[1]
+	if got := a.focusedIn(w1); got != "t2" {
+		t.Errorf("shown workspace's pane %q, want t2", got)
+	}
+	if got := a.focusedIn(w2); got != "windows/t3" {
+		t.Errorf("other workspace's pane %q, want windows/t3", got)
+	}
+	for _, c := range []struct{ machine, beside, cwd string }{
+		{"windows", "windows/t3", `C:\proj`},
+		{"", "windows/t3", ""},
+		{"", "t2", "/src"},
+		{"windows", "t2", ""},
+		{"", "", ""},
+	} {
+		if got := a.cwdOn(c.machine, c.beside); got != c.cwd {
+			t.Errorf("on %q beside %q: %q, want %q", c.machine, c.beside, got, c.cwd)
+		}
+	}
+}
+
 // The core lists no terminal of a machine it can't reach: their panes stay
 // till it is back, and their headers say it is away. A machine connected,
 // or one the core no longer has, lists all its terminals: one missing is

@@ -518,13 +518,50 @@ func (a *app) focusedTerminal() string {
 	return ""
 }
 
-// newTab makes a tab in a workspace and shows it, giving its pane the
-// keyboard: it starts where the focused pane's program is, on its machine.
-func (a *app) newTab(workspaceID string) {
-	if a.lay.Workspace(workspaceID) == nil {
-		return
+// focusedIn returns the terminal of a workspace's focused pane: that of
+// the tab shown if it is the workspace's, else of its first tab.
+func (a *app) focusedIn(ws *layout.Workspace) string {
+	if shown, t := a.lay.ActiveTab(); shown == ws && t != nil {
+		return t.Focus
 	}
-	a.runBeside(a.focusedTerminal(), func(addr string) {
+	if len(ws.Tabs) > 0 {
+		return ws.Tabs[0].Focus
+	}
+	return ""
+}
+
+// cwdOn returns where a new terminal on a machine, "" for the core's own,
+// starts: where the program of a terminal, beside, is if it is on that
+// machine, else "" for the machine's home.
+func (a *app) cwdOn(machine, beside string) string {
+	if beside != "" && hc.MachineOf(beside) == machine {
+		return a.cwdOf(beside)
+	}
+	return ""
+}
+
+// newTab makes a tab in a workspace and shows it, giving its pane the
+// keyboard: it starts where the workspace's focused pane's program is, on
+// its machine.
+func (a *app) newTab(workspaceID string) {
+	if ws := a.lay.Workspace(workspaceID); ws != nil {
+		a.runBeside(a.focusedIn(ws), a.addTab(workspaceID))
+	}
+}
+
+// newTabOn makes a tab in a workspace on a machine, "" for the core's
+// own: where the workspace's focused pane's program is if it is on that
+// machine, else in the home.
+func (a *app) newTabOn(workspaceID, machine string) {
+	if ws := a.lay.Workspace(workspaceID); ws != nil {
+		a.run(machine, a.cwdOn(machine, a.focusedIn(ws)), a.addTab(workspaceID))
+	}
+}
+
+// addTab returns what shows a new tab of a terminal in a workspace, or in
+// a workspace of its own if that one went meanwhile.
+func (a *app) addTab(workspaceID string) func(address string) {
+	return func(addr string) {
 		ws := a.lay.Workspace(workspaceID)
 		if ws == nil {
 			ws, _ = a.lay.AddWorkspace(addr)
@@ -533,7 +570,7 @@ func (a *app) newTab(workspaceID string) {
 		}
 		a.collapse(ws.ID, false)
 		a.shown()
-	})
+	}
 }
 
 // newWorkspace makes a workspace and shows it, as newTab does a tab.
@@ -545,11 +582,7 @@ func (a *app) newWorkspace() {
 // where the focused pane's program is if it is on that machine, else in
 // the home.
 func (a *app) newWorkspaceOn(machine string) {
-	if focused := a.focusedTerminal(); hc.MachineOf(focused) == machine {
-		a.runBeside(focused, a.addWorkspace)
-	} else {
-		a.run(machine, "", a.addWorkspace)
-	}
+	a.run(machine, a.cwdOn(machine, a.focusedTerminal()), a.addWorkspace)
 }
 
 // addWorkspace shows a new workspace of a terminal.
