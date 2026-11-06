@@ -104,6 +104,7 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 - `keep` terminals come back after a core or machine restart with a fresh shell in their last folder (not the program they ran); until then, attaching says `unavailable`, and a `restarted` event follows.
 - A machine the core can't reach: its terminals leave the core's list with no event, attaching says `unavailable`, an attached stream stays open and goes on as the machine is back, and what is typed meanwhile is lost; as it is back, a `missed` brings them again. `--via` with a script that runs `sh -c` makes a machine of the same computer, for tests (`TestMachineWithCore`).
 - A core someone else started (a terminal's `hc`) keeps that one's environment: Mux's login-shell environment only reaches a core Mux starts.
+- On macOS, the programs of all terminals share the core's coalition ([herdr-core#140](https://github.com/herdrdev/herdr-core/issues/140), after #101). A GUI app run straight from a pane, as `go tool mygo dev` runs Mux Dev, stays in the Dock as Running in Background once it quits, and quitting that entry ends the core and every terminal; macOS may force-quit an unsigned build that way on its own. Leave the entry be or run `mygo dev` outside Mux, and start other apps with `open`, which gives them a coalition of their own.
 
 ### MyGo
 
