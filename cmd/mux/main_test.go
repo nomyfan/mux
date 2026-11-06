@@ -605,6 +605,83 @@ func TestSwitchTab(t *testing.T) {
 	}
 }
 
+// A tab dragged in the sidebar goes before the tab it is dropped on the
+// upper half of, after one it is dropped on the lower half of, of its
+// workspace or another, and after a workspace's tabs dropped on its name;
+// a workspace it leaves with no tab closes.
+func TestDragTab(t *testing.T) {
+	a := newApp(layout.Layout{Active: "tab1", Workspaces: []*layout.Workspace{
+		{ID: "w1", Name: "api", Tabs: []*layout.Tab{tab("tab1", "t1"), tab("tab3", "t3")}},
+		{ID: "w2", Name: "web", Tabs: []*layout.Tab{tab("tab2", "t2")}},
+	}}, shell("t1", "/srv/api"), shell("t2", "/srv/web"), shell("t3", "/srv/docs"))
+	a.collapse(agentsSection, true)
+	tt := ui.NewTester(a.view, 1000, 600)
+	order := func() string {
+		var out []string
+		for _, ws := range a.lay.Workspaces {
+			var tabs []string
+			for _, t := range ws.Tabs {
+				tabs = append(tabs, t.ID)
+			}
+			out = append(out, ws.ID+":"+strings.Join(tabs, ","))
+		}
+		return strings.Join(out, " ")
+	}
+	drag := func(from, to string, lower bool) {
+		t.Helper()
+		f, ok := tt.Find(from)
+		if !ok {
+			t.Fatalf("no %q in %q", from, tt.Texts())
+		}
+		r, ok := tt.Find(to)
+		if !ok {
+			t.Fatalf("no %q in %q", to, tt.Texts())
+		}
+		y := r.Y + 2
+		if lower {
+			y = r.Y + r.H - 2
+		}
+		tt.Press(f.X+10, f.Y+f.H/2)
+		tt.Move(f.X+20, f.Y+f.H/2+10)
+		tt.Move(r.X+10, y)
+		tt.Release(r.X+10, y)
+		tt.Advance(time.Second)
+	}
+	// A drag of a single move, its release in the frame it starts in.
+	f, _ := tt.Find("/srv/docs")
+	r, _ := tt.Find("/srv/api")
+	tt.Press(f.X+10, f.Y+f.H/2)
+	tt.Move(r.X+10, r.Y+2)
+	tt.Release(r.X+10, r.Y+2)
+	tt.Advance(time.Second)
+	if got := order(); got != "w1:tab3,tab1 w2:tab2" {
+		t.Fatalf("before the first tab: %s", got)
+	}
+	drag("/srv/docs", "/srv/web", true)
+	if got := order(); got != "w1:tab1 w2:tab2,tab3" {
+		t.Fatalf("after another workspace's tab: %s", got)
+	}
+	// Released in the item's other half before a frame showed the line
+	// there, the tab goes where the pointer let go.
+	f, _ = tt.Find("/srv/docs")
+	r, _ = tt.Find("/srv/web")
+	tt.Press(f.X+10, f.Y+f.H/2)
+	tt.Move(f.X+20, f.Y+f.H/2-10)
+	tt.Move(r.X+10, r.Y+r.H-2)
+	tt.Release(r.X+10, r.Y+2)
+	if got := order(); got != "w1:tab1 w2:tab3,tab2" {
+		t.Fatalf("released above the line shown below: %s", got)
+	}
+	a.collapse("w2", true)
+	drag("/srv/api", "web", false)
+	if got := order(); got != "w2:tab3,tab2,tab1" || a.collapsed["w2"] {
+		t.Fatalf("dropped on a workspace's name: %s, collapsed %v", got, a.collapsed["w2"])
+	}
+	if a.lay.Active != "tab1" || a.chosen != "tab1" {
+		t.Errorf("moved, the tab shown is %q, chosen %q", a.lay.Active, a.chosen)
+	}
+}
+
 func TestGitBranch(t *testing.T) {
 	dir := t.TempDir()
 	write := func(path, data string) {

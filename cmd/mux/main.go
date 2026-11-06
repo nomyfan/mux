@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,14 @@ type app struct {
 	// confirm while confirming.
 	closing    *closing
 	confirming bool
+	// tabMove is the tab the user dropped in the sidebar, which moves once
+	// the sidebar is built. tabDragged holds while the user drags a tab, as
+	// of the last pass, which draggingSeen notes for the next; dropTargets
+	// while the tabs' items take a tab dropped (tabDrop) in this one.
+	tabMove      *tabMove
+	tabDragged   bool
+	draggingSeen bool
+	dropTargets  bool
 	// settings are the user's, which the settings dialog shows while
 	// settingsOpen, on settingsPage, its appearance control choosing
 	// appearance.
@@ -205,8 +214,14 @@ func (a *app) view(c *ui.Context) {
 		// The sidebar slides out to the left as it hides.
 		w := a.sidebarWidth * shown
 		ui.Row(c).Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
-			ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth).Background(t.Surface).
-				Children(func() { a.sidebar(c) })
+			side := ui.Column(c.Key("sidebar")).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth).Background(t.Surface)
+			// The tabs' items take a tab dropped from the pass its drag
+			// starts in: the item it starts on, built after them, tells it
+			// only once they are built, but the sidebar, built before them,
+			// takes the drag over them till they do.
+			_, over := ui.DragOver[tabDrag](side)
+			a.dropTargets = a.tabDragged || over
+			side.Children(func() { a.sidebar(c) })
 		})
 		if w > 0 {
 			ui.Box(c).Width(1).Background(t.Border)
@@ -281,6 +296,22 @@ func (a *app) sidebar(c *ui.Context) {
 			})
 		}
 	}).Grow(1).Label("Tabs and Agents").OnChange(a.showChosen)
+	// A tab dropped moves once the sidebar is built, not while it goes
+	// through the tabs.
+	if a.tabDragged != a.draggingSeen {
+		// The items' targets go, or show, in another pass.
+		a.tabDragged = a.draggingSeen
+		c.Invalidate()
+	}
+	a.draggingSeen = false
+	if m := a.tabMove; m != nil {
+		a.tabMove = nil
+		if a.lay.MoveTab(m.id, m.to, m.before) {
+			a.collapse(m.to, false)
+			a.save()
+		}
+		c.Invalidate()
+	}
 	// Without a core, the panes' room says so.
 	if a.err != "" && !a.notInstalled && !a.stopped() {
 		ui.Text(c, a.err).FontSize(12).TextColor(c.Theme().Danger).Padding(8, 12)
@@ -496,6 +527,13 @@ func (a *app) workspaceHeader(c *ui.Context, ws *layout.Workspace, open bool) {
 	shown := head.Hovered() || head.FocusWithin()
 	toggle := head.Clicked()
 	name := a.workspaceName(ws)
+	// A tab dropped on the header goes after the workspace's others.
+	if d, ok := ui.DragOver[tabDrag](head); ok && a.tabMoves(d.id, ws, "") {
+		head.Background(t.Accent.Alpha(0.15))
+	}
+	if d, ok := ui.Drop[tabDrag](head); ok && a.tabMoves(d.id, ws, "") {
+		a.tabMove = &tabMove{d.id, ws.ID, ""}
+	}
 	head.Children(func() {
 		if a.renaming == ws.ID {
 			a.renameField(c, "Workspace Name", ws.Name, func(name string) {
@@ -553,6 +591,10 @@ func (a *app) tabItem(c *ui.Context, ws *layout.Workspace, tab *layout.Tab) {
 	chosenLook(c, item, tab.ID == a.chosen)
 	hovered := item.Hovered()
 	status := a.tabStatus(tab)
+	item.Drag(tabDrag{tab.ID})
+	if item.Dragging() {
+		a.draggingSeen = true
+	}
 	item.Children(func() {
 		iconOver(c, icon, mark)
 		switch {
@@ -569,7 +611,86 @@ func (a *app) tabItem(c *ui.Context, ws *layout.Workspace, tab *layout.Tab) {
 		default:
 			statusDot(c, status)
 		}
+		if a.dropTargets {
+			if side := a.tabDrop(c, ws, tab); side != 0 {
+				dropLine(c, side)
+			}
+		}
 	})
+}
+
+// tabDrag is a tab the user drags in the sidebar, to another place among
+// the tabs of its workspace or another's.
+type tabDrag struct{ id string }
+
+// tabMove is a tab dropped in the sidebar, which goes to the workspace to,
+// before its tab before, or after its others for "".
+type tabMove struct{ id, to, before string }
+
+// tabDrop lays targets over the halves of a tab's item, on top of what
+// it shows, while a tab is dragged: one dropped on the upper half goes
+// before the tab, on the lower after it. MyGo finds the target where the
+// pointer let go, so the tab goes there though the pointer moves on before
+// the frame showing the drop. It returns where a tab dragged over the item
+// would go: -1 before, 1 after, 0 nowhere, as over itself or beside its
+// own place.
+func (a *app) tabDrop(c *ui.Context, ws *layout.Workspace, tab *layout.Tab) int {
+	shown := 0
+	for _, side := range []int{-1, 1} {
+		half := ui.Box(c.Key(fmt.Sprint("drop ", side))).Absolute().Left(0).Right(0).HeightPercent(50)
+		before := tab.ID
+		if side < 0 {
+			half.Top(0)
+		} else {
+			half.Bottom(0)
+			before = ""
+			if i := slices.Index(ws.Tabs, tab); i+1 < len(ws.Tabs) {
+				before = ws.Tabs[i+1].ID
+			}
+		}
+		d, over := ui.DragOver[tabDrag](half)
+		dropped, ok := ui.Drop[tabDrag](half)
+		if ok {
+			d = dropped
+		}
+		if !over && !ok || !a.tabMoves(d.id, ws, before) {
+			continue
+		}
+		shown = side
+		if ok {
+			a.tabMove = &tabMove{d.id, ws.ID, before}
+		}
+	}
+	return shown
+}
+
+// tabMoves reports whether a tab, id, would move, put in a workspace
+// before its tab before, or after its others for "".
+func (a *app) tabMoves(id string, ws *layout.Workspace, before string) bool {
+	from, _ := a.lay.Tab(id)
+	if from != ws {
+		return from != nil
+	}
+	i := slices.IndexFunc(ws.Tabs, func(t *layout.Tab) bool { return t.ID == id })
+	next := ""
+	if i+1 < len(ws.Tabs) {
+		next = ws.Tabs[i+1].ID
+	}
+	return before != id && before != next
+}
+
+// dropLine shows where a tab dropped goes, in the gap above the sidebar
+// item it is in (side -1), or below it (1).
+func dropLine(c *ui.Context, side int) {
+	t := c.Theme()
+	const thick = 2
+	at := -(t.Space(0.5) + thick) / 2
+	line := ui.Box(c.Key("drop line")).PassThrough().Absolute().Left(t.Space(1)).Right(t.Space(1)).Height(thick).Radius(thick / 2).Background(t.Accent)
+	if side < 0 {
+		line.Top(at)
+	} else {
+		line.Bottom(at)
+	}
 }
 
 // tabTerminals returns the terminals of a tab's panes.

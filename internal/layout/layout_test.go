@@ -139,6 +139,39 @@ func TestSwapMove(t *testing.T) {
 	}
 }
 
+func TestMoveTab(t *testing.T) {
+	var l Layout
+	w1, t1 := l.AddWorkspace("t1")
+	t2 := l.AddTab(w1, "t2")
+	t3 := l.AddTab(w1, "t3")
+	w2, t4 := l.AddWorkspace("t4")
+	ids := func(ws *Workspace) []string {
+		var out []string
+		for _, t := range ws.Tabs {
+			out = append(out, t.ID)
+		}
+		return out
+	}
+	if !l.MoveTab(t3.ID, w1.ID, t1.ID) || !slices.Equal(ids(w1), []string{t3.ID, t1.ID, t2.ID}) {
+		t.Fatalf("before the first: %v", ids(w1))
+	}
+	if l.MoveTab(t1.ID, w1.ID, t2.ID) || l.MoveTab(t1.ID, w1.ID, t1.ID) || !slices.Equal(ids(w1), []string{t3.ID, t1.ID, t2.ID}) {
+		t.Fatalf("moved in place: %v", ids(w1))
+	}
+	if !l.MoveTab(t3.ID, w1.ID, "") || !slices.Equal(ids(w1), []string{t1.ID, t2.ID, t3.ID}) {
+		t.Fatalf("after the last: %v", ids(w1))
+	}
+	if !l.MoveTab(t2.ID, w2.ID, t4.ID) || !slices.Equal(ids(w1), []string{t1.ID, t3.ID}) || !slices.Equal(ids(w2), []string{t2.ID, t4.ID}) {
+		t.Fatalf("to another workspace: %v %v", ids(w1), ids(w2))
+	}
+	// The workspace's last tab leaves it closed.
+	l.MoveTab(t1.ID, w2.ID, "")
+	l.MoveTab(t3.ID, w2.ID, "")
+	if len(l.Workspaces) != 1 || !slices.Equal(ids(w2), []string{t2.ID, t4.ID, t1.ID, t3.ID}) {
+		t.Fatalf("emptied: %d workspaces, %v", len(l.Workspaces), ids(w2))
+	}
+}
+
 func TestPruneRepair(t *testing.T) {
 	var l Layout
 	_, tab := l.AddWorkspace("t1")

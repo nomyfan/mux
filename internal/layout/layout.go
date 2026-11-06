@@ -171,6 +171,28 @@ func (l *Layout) RemoveTab(id string) {
 	}
 }
 
+// MoveTab moves a tab into the workspace to, before its tab before, or
+// after its others if before is "" or not among them: a workspace it
+// leaves with no tab closes. It reports whether the tab moved.
+func (l *Layout) MoveTab(id, to, before string) bool {
+	from, t := l.Tab(id)
+	ws := l.Workspace(to)
+	if t == nil || ws == nil || before == id {
+		return false
+	}
+	i := slices.Index(from.Tabs, t)
+	from.Tabs = slices.Delete(from.Tabs, i, i+1)
+	j := slices.IndexFunc(ws.Tabs, func(t *Tab) bool { return t.ID == before })
+	if j < 0 {
+		j = len(ws.Tabs)
+	}
+	ws.Tabs = slices.Insert(ws.Tabs, j, t)
+	if len(from.Tabs) == 0 {
+		l.Workspaces = slices.DeleteFunc(l.Workspaces, func(w *Workspace) bool { return w == from })
+	}
+	return from != ws || i != j
+}
+
 // Terminals returns the terminals of a workspace's panes.
 func (ws *Workspace) Terminals() []string {
 	var out []string
