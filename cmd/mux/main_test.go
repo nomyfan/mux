@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
 	"mux/internal/hc"
@@ -921,5 +922,24 @@ func TestMachineSettings(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("%d Connect buttons, want one for each machine not connected", n)
+	}
+}
+
+// Zooming steps the terminals' font size within the control's bounds, or
+// sets it back to the default, and saves it.
+func TestZoom(t *testing.T) {
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	a := newApp(layout.Layout{})
+	a.zoom(terminal.Zoom{Steps: 2})
+	if s := loadSettings().FontSize; s != defaultFontSize+2 || a.term.Font().Size != defaultFontSize+2 || a.fontSize != defaultFontSize+2 {
+		t.Errorf("saved size %v after zooming in twice", s)
+	}
+	a.zoom(terminal.Zoom{Steps: -100})
+	if s := loadSettings().FontSize; s != minFontSize {
+		t.Errorf("saved size %v after zooming far out", s)
+	}
+	a.zoom(terminal.Zoom{Reset: true})
+	if s := loadSettings().FontSize; s != 0 || a.term.Font().Size != defaultFontSize {
+		t.Errorf("saved size %v after zooming back", s)
 	}
 }
