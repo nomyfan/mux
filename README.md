@@ -13,3 +13,9 @@ curl -fsSL https://releases.herdr.dev/core/install.sh | sh   # install herdr-cor
 go tool mygo dev     # run
 go tool mygo build   # package into build/
 ```
+
+Agents in Mux's panes can find their workspace and tab, and the panes around them, with the [`mux` skill](skills/mux/SKILL.md):
+
+```sh
+mkdir -p ~/.claude/skills && ln -s "$PWD/skills/mux" ~/.claude/skills/mux
+```

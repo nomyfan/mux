@@ -85,7 +85,7 @@ Shows a tab's panes, each a terminal of MyGo's terminal plugin, which parses the
 
 ### Other directories
 
-`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
+`resources/` holds assets shipped inside the app bundle (the app icon); `design/` holds source files that are not shipped; `docs/` holds the README's screenshot; `skills/mux/` holds the skill for agents in Mux's panes, telling them how to find their workspace, tab and neighbors by the labels `core.go` sets (users install it, as the README says; `.agents/skills/` is for skills installed from `.agents/skills.toml` and is not committed), so change it with those labels; `scripts/` holds tools for maintaining the repository, such as `make-icon.sh`, which renders `resources/icon.png` and `cmd/mux/icons/app.png` from the artwork in `design/`; `make-screenshot.sh`, which makes `docs/screenshot.png` from a light and a dark screenshot of the window; and `make-appearance-previews.sh`, which writes the settings' appearance pictures.
 
 ## Notes
 
