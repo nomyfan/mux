@@ -4,21 +4,21 @@
     <clipPath id="below"><path d="M120 0V76H0z"/></clipPath>
   </defs>
   <g clip-path="url(#window)">
-    <rect width="120" height="76" fill="#faf8f5"/>
-    <rect width="34" height="76" fill="#efeae4"/>
-    <rect x="34" width="0.5" height="76" fill="#cbbdae"/>
-    <rect x="77" width="0.5" height="76" fill="#cbbdae"/>
-    <rect x="77.5" y="40" width="42.5" height="0.5" fill="#cbbdae"/>
+    <rect width="120" height="76" fill="#f8f3ea"/>
+    <rect width="34" height="76" fill="#f1eae1"/>
+    <rect x="34" width="0.5" height="76" fill="#e5ddd1"/>
+    <rect x="77" width="0.5" height="76" fill="#e5ddd1"/>
+    <rect x="77.5" y="40" width="42.5" height="0.5" fill="#e5ddd1"/>
     <circle cx="6" cy="6" r="1.6" fill="#ff5f57"/>
     <circle cx="11" cy="6" r="1.6" fill="#febc2e"/>
     <circle cx="16" cy="6" r="1.6" fill="#28c840"/>
-    <g fill="#8a837b">
+    <g fill="#6f6861">
       <rect x="5" y="13" width="8" height="1.6" rx="0.8"/>
       <rect x="5" y="35" width="9" height="1.6" rx="0.8"/>
       <rect x="5" y="49" width="10" height="1.6" rx="0.8"/>
     </g>
-    <rect x="3" y="17" width="28" height="7" rx="2" fill="#e0d6cc"/>
-    <g fill="#b8622a">
+    <rect x="3" y="17" width="28" height="7" rx="2" fill="#e1d7cb"/>
+    <g fill="#b1632f">
       <rect x="5.5" y="19.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="27.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="40.7" width="3" height="1.6" rx="0.4"/>
@@ -32,7 +32,7 @@
       <rect x="10.5" y="54.7" width="10" height="1.6" rx="0.8"/>
       <rect x="10.5" y="61.7" width="9" height="1.6" rx="0.8"/>
     </g>
-    <g fill="#8a837b">
+    <g fill="#6f6861">
       <rect x="39" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="44.2" width="20" height="1.6" rx="0.8"/>
@@ -72,7 +72,7 @@
       <rect x="88.5" y="68" width="16" height="1.4" rx="0.7"/>
       <rect x="88.5" y="71" width="23" height="1.4" rx="0.7"/>
     </g>
-    <rect x="0.25" y="0.25" width="119.5" height="75.5" rx="5.75" fill="none" stroke="#cbbdae" stroke-width="0.5"/>
+    <rect x="0.25" y="0.25" width="119.5" height="75.5" rx="5.75" fill="none" stroke="#e5ddd1" stroke-width="0.5"/>
   </g>
   <g clip-path="url(#below)"><g clip-path="url(#window)">
     <rect width="120" height="76" fill="#1a1816"/>
@@ -83,13 +83,13 @@
     <circle cx="6" cy="6" r="1.6" fill="#ff5f57"/>
     <circle cx="11" cy="6" r="1.6" fill="#febc2e"/>
     <circle cx="16" cy="6" r="1.6" fill="#28c840"/>
-    <g fill="#7c7670">
+    <g fill="#948d85">
       <rect x="5" y="13" width="8" height="1.6" rx="0.8"/>
       <rect x="5" y="35" width="9" height="1.6" rx="0.8"/>
       <rect x="5" y="49" width="10" height="1.6" rx="0.8"/>
     </g>
     <rect x="3" y="17" width="28" height="7" rx="2" fill="#413b35"/>
-    <g fill="#cf9370">
+    <g fill="#e6a67e">
       <rect x="5.5" y="19.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="27.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="40.7" width="3" height="1.6" rx="0.4"/>
@@ -103,7 +103,7 @@
       <rect x="10.5" y="54.7" width="10" height="1.6" rx="0.8"/>
       <rect x="10.5" y="61.7" width="9" height="1.6" rx="0.8"/>
     </g>
-    <g fill="#7c7670">
+    <g fill="#948d85">
       <rect x="39" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="44.2" width="20" height="1.6" rx="0.8"/>

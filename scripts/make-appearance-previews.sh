@@ -86,8 +86,8 @@ EOF
   print "    <rect x=\"0.25\" y=\"0.25\" width=\"$((w - 0.5))\" height=\"$((h - 0.5))\" rx=\"5.75\" fill=\"none\" stroke=\"$border\" stroke-width=\"0.5\"/>"
 }
 
-light() { bg='#faf8f5' surface='#efeae4' chosen='#e0d6cc' border='#cbbdae' text='#45413d' muted='#8a837b' accent='#b8622a' green='#507c39' yellow='#956900' window }
-dark() { bg='#1a1816' surface='#151311' chosen='#413b35' border='#3e3934' text='#d8d3cb' muted='#7c7670' accent='#cf9370' green='#a6c485' yellow='#dbbc7f' window }
+light() { bg='#f8f3ea' surface='#f1eae1' chosen='#e1d7cb' border='#e5ddd1' text='#45413d' muted='#6f6861' accent='#b1632f' green='#507c39' yellow='#956900' window }
+dark() { bg='#1a1816' surface='#151311' chosen='#413b35' border='#3e3934' text='#d8d3cb' muted='#948d85' accent='#e6a67e' green='#a6c485' yellow='#dbbc7f' window }
 
 # svg writes a picture of what its arguments draw, clipped to the window's rounded corners.
 svg() {

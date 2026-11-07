@@ -12,13 +12,13 @@
     <circle cx="6" cy="6" r="1.6" fill="#ff5f57"/>
     <circle cx="11" cy="6" r="1.6" fill="#febc2e"/>
     <circle cx="16" cy="6" r="1.6" fill="#28c840"/>
-    <g fill="#7c7670">
+    <g fill="#948d85">
       <rect x="5" y="13" width="8" height="1.6" rx="0.8"/>
       <rect x="5" y="35" width="9" height="1.6" rx="0.8"/>
       <rect x="5" y="49" width="10" height="1.6" rx="0.8"/>
     </g>
     <rect x="3" y="17" width="28" height="7" rx="2" fill="#413b35"/>
-    <g fill="#cf9370">
+    <g fill="#e6a67e">
       <rect x="5.5" y="19.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="27.7" width="3" height="1.6" rx="0.4"/>
       <rect x="5.5" y="40.7" width="3" height="1.6" rx="0.4"/>
@@ -32,7 +32,7 @@
       <rect x="10.5" y="54.7" width="10" height="1.6" rx="0.8"/>
       <rect x="10.5" y="61.7" width="9" height="1.6" rx="0.8"/>
     </g>
-    <g fill="#7c7670">
+    <g fill="#948d85">
       <rect x="39" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="5.2" width="22" height="1.6" rx="0.8"/>
       <rect x="81" y="44.2" width="20" height="1.6" rx="0.8"/>
