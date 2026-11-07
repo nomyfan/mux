@@ -60,10 +60,12 @@ func (s settings) terminalFont() terminal.Font {
 	return terminal.Font{Family: families, Size: float32(cmp.Or(s.FontSize, defaultFontSize)), Thicken: s.FontSmoothing}
 }
 
-// previewFont is the terminals' font as the settings' preview draws it.
+// previewFont is the terminals' font as the settings' preview draws it:
+// as the terminal plugin draws text, with the system's font smoothing,
+// at full strength when thickened.
 func (s settings) previewFont() ui.Font {
 	f := s.terminalFont()
-	return ui.Font{Family: f.Family, Size: f.Size, Antialiased: !f.Thicken}
+	return ui.Font{Family: f.Family, Size: f.Size, Thicken: f.Thicken}
 }
 
 // appearances are the choices of the dialog's appearance control, in order.
